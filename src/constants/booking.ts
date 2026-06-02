@@ -43,7 +43,8 @@ export const OPERATING = {
 
 /** Minimum / maximum people on a single reservation. */
 export const MEMBER_LIMITS = {
-  min: 1,
+  // The JNU system requires at least 2 people per study-room reservation.
+  min: 2,
   max: 8,
 } as const;
 
