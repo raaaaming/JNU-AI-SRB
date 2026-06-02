@@ -62,8 +62,17 @@ export default function LoginScreen() {
     (navState: WebViewNavigation) => {
       const url = navState.url ?? '';
 
-      // Once the page lands on the booking domain → login succeeded
-      if (url.includes('cvg.jnu.ac.kr') && !completedRef.current) {
+      // Login succeeds once the page actually lands ON the cvg origin
+      // (not merely mentions it in a returnUrl query param while still on
+      // the SSO host). Match the scheme+host prefix, not a substring.
+      const onBookingOrigin =
+        url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
+
+      // Only when the page has fully settled — while the SSO round-trip is
+      // still redirecting, navState.loading is true and the URL may flicker
+      // through cvg before bouncing to the SSO host. Waiting for the load to
+      // finish avoids that false positive.
+      if (onBookingOrigin && !navState.loading && !completedRef.current) {
         // Try to scrape user info from the page before we navigate away
         webViewRef.current?.injectJavaScript(EXTRACT_USER_SCRIPT);
 
@@ -121,7 +130,11 @@ export default function LoginScreen() {
       <View style={styles.webViewContainer}>
         <WebView
           ref={webViewRef}
-          source={{ uri: URLS.SSO_LOGIN }}
+          // Start at the protected booking page (not the bare SSO login).
+          // When unauthenticated, cvg itself redirects to SSO WITH the correct
+          // return target, so after login the session lands back on cvg —
+          // instead of the generic JNU portal.
+          source={{ uri: URLS.BOOKING_CALENDAR }}
           style={styles.webView}
           // Cookie sharing
           sharedCookiesEnabled
