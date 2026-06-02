@@ -1,15 +1,18 @@
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
-import { useAuth } from '@/hooks/useAuth';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 
 /**
- * Root layout — handles authentication-based routing.
+ * Inner component that owns the auth-based routing guard.
+ * Lives below <AuthProvider> so it shares the single auth state instance.
  *
  * - While auth state is loading from AsyncStorage, renders nothing.
  * - Unauthenticated users are redirected to /login.
  * - Authenticated users see the main (tabs) layout.
  */
-export default function RootLayout() {
+function RootNavigator() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
@@ -30,7 +33,7 @@ export default function RootLayout() {
     }
   }, [auth.isLoggedIn, auth.isLoading, segments, router]);
 
-  // Render nothing while loading to avoid a flash of wrong screen
+  // Render nothing while loading to avoid a flash of the wrong screen
   if (auth.isLoading) return null;
 
   return (
@@ -39,5 +42,20 @@ export default function RootLayout() {
       <Stack.Screen name="login" />
       <Stack.Screen name="(tabs)" />
     </Stack>
+  );
+}
+
+/**
+ * Root layout — provides shared context to the whole app.
+ */
+export default function RootLayout() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <RootNavigator />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
