@@ -35,8 +35,15 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(true);
   // Ensures we navigate into the app exactly once.
   const completedRef = useRef(false);
-  // Avoids re-probing the same cvg URL repeatedly (which could click login twice).
-  const lastProbedUrlRef = useRef<string>('');
+  // Latest URL the WebView is on.
+  const currentUrlRef = useRef<string>('');
+  // Whether we've already probed during the CURRENT visit to cvg. Reset every
+  // time we leave cvg (e.g. to the SSO host), so returning from SSO re-probes.
+  const probedVisitRef = useRef(false);
+
+  /** True when a URL is on the cvg booking origin (scheme+host prefix). */
+  const isBookingOrigin = (url: string) =>
+    url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
 
   /** Finalize login exactly once: persist auth, then enter the app. */
   const completeLogin = useCallback(
@@ -51,26 +58,38 @@ export default function LoginScreen() {
     [auth, router],
   );
 
-  /** Called when the WebView navigates to a new URL. */
-  const handleNavigationStateChange = useCallback((navState: WebViewNavigation) => {
-    const url = navState.url ?? '';
-
-    // Match the cvg origin by scheme+host prefix (not a substring, so a cvg
-    // returnUrl param while still on the SSO host doesn't count).
-    const onBookingOrigin =
-      url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
-
-    // Landing on cvg is NOT proof of login — its calendar is publicly
-    // viewable. Once the page settles, probe it: AUTH_PROBE_SCRIPT reports
-    // whether we're authenticated (→ finish login) and, if not, clicks the
-    // page's own login link to start the real SSO flow. Probe once per URL.
-    if (onBookingOrigin && !navState.loading && !completedRef.current) {
-      if (lastProbedUrlRef.current !== url) {
-        lastProbedUrlRef.current = url;
-        webViewRef.current?.injectJavaScript(AUTH_PROBE_SCRIPT);
-      }
-    }
+  /**
+   * Probe the current cvg page for real auth — but only once per visit.
+   * Landing on cvg is NOT proof of login (its calendar is publicly viewable),
+   * so AUTH_PROBE_SCRIPT reports whether we're authenticated (→ finish login)
+   * and, if not, clicks the page's own login link to start the real SSO flow.
+   */
+  const maybeProbe = useCallback(() => {
+    if (completedRef.current) return;
+    if (!isBookingOrigin(currentUrlRef.current)) return;
+    if (probedVisitRef.current) return;
+    probedVisitRef.current = true;
+    webViewRef.current?.injectJavaScript(AUTH_PROBE_SCRIPT);
   }, []);
+
+  /** Called when the WebView navigates to a new URL. */
+  const handleNavigationStateChange = useCallback(
+    (navState: WebViewNavigation) => {
+      const url = navState.url ?? '';
+      currentUrlRef.current = url;
+
+      // Whenever we're off cvg (e.g. the SSO host during the login round-trip),
+      // arm a fresh probe so the return to cvg is re-checked. This fixes the
+      // case where SSO sends us back to the SAME cvg URL we already probed —
+      // previously that was suppressed and login silently never completed.
+      if (!isBookingOrigin(url)) {
+        probedVisitRef.current = false;
+        return;
+      }
+      if (!navState.loading) maybeProbe();
+    },
+    [maybeProbe],
+  );
 
   /** Handles postMessages sent from injected JS (AUTH_PROBE_SCRIPT). */
   const handleMessage = useCallback(
@@ -133,7 +152,13 @@ export default function LoginScreen() {
           onNavigationStateChange={handleNavigationStateChange}
           onMessage={handleMessage}
           onLoadStart={() => setIsLoading(true)}
-          onLoadEnd={() => setIsLoading(false)}
+          onLoadEnd={() => {
+            setIsLoading(false);
+            // Backup to onNavigationStateChange: guarantees a probe once the
+            // page has fully finished loading, even if the nav event's
+            // loading=false transition was missed.
+            maybeProbe();
+          }}
           // Allow mixed content on Android (portal may load some http assets)
           mixedContentMode={Platform.OS === 'android' ? 'compatibility' : undefined}
         />

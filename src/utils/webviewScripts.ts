@@ -164,44 +164,55 @@ export const EXTRACT_USER_SCRIPT = `
 export const AUTH_PROBE_SCRIPT = `
 (function() {
   function post(o) { if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
-  try {
-    var nodes = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
-    var logoutEl = null, loginEl = null;
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      var t = (el.textContent || el.value || '').replace(/\\s+/g, '');
-      var attr = (((el.getAttribute && el.getAttribute('onclick')) || '') + ' ' +
-                  ((el.getAttribute && el.getAttribute('href')) || '')).toLowerCase();
-      var isLogout = t.indexOf('로그아웃') >= 0 || attr.indexOf('logout') >= 0;
-      var isLogin = !isLogout && (t.indexOf('로그인') >= 0 ||
-                    (attr.indexOf('login') >= 0 && attr.indexOf('logout') < 0));
-      if (!logoutEl && isLogout) logoutEl = el;
-      if (!loginEl && isLogin) loginEl = el;
-    }
-    if (logoutEl) {
-      var name = '';
-      var nameSel = ['.user_name', '.userName', '#userName', '.member_name',
-        '.login_name', '[class*="user_nm"]', '[class*="userNm"]'];
-      for (var n = 0; n < nameSel.length; n++) {
-        var ne = document.querySelector(nameSel[n]);
-        if (ne && ne.textContent && ne.textContent.trim()) { name = ne.textContent.trim(); break; }
+  var attempts = 0;
+  function probe() {
+    attempts++;
+    try {
+      var nodes = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
+      var logoutEl = null, loginEl = null;
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        var t = (el.textContent || el.value || '').replace(/\\s+/g, '');
+        var attr = (((el.getAttribute && el.getAttribute('onclick')) || '') + ' ' +
+                    ((el.getAttribute && el.getAttribute('href')) || '')).toLowerCase();
+        var isLogout = t.indexOf('로그아웃') >= 0 || attr.indexOf('logout') >= 0;
+        var isLogin = !isLogout && (t.indexOf('로그인') >= 0 ||
+                      (attr.indexOf('login') >= 0 && attr.indexOf('logout') < 0));
+        if (!logoutEl && isLogout) logoutEl = el;
+        if (!loginEl && isLogin) loginEl = el;
       }
-      post({ type: 'authState', authed: true, name: name, id: '' });
-    } else if (loginEl) {
-      post({ type: 'authState', authed: false });
-      setTimeout(function () {
-        try { loginEl.click(); }
-        catch (e) {
-          var h = loginEl.getAttribute && loginEl.getAttribute('href');
-          if (h && h.charAt(0) !== '#') { window.location.href = h; }
+      if (logoutEl) {
+        var name = '';
+        var nameSel = ['.user_name', '.userName', '#userName', '.member_name',
+          '.login_name', '[class*="user_nm"]', '[class*="userNm"]'];
+        for (var n = 0; n < nameSel.length; n++) {
+          var ne = document.querySelector(nameSel[n]);
+          if (ne && ne.textContent && ne.textContent.trim()) { name = ne.textContent.trim(); break; }
         }
-      }, 80);
-    } else {
+        post({ type: 'authState', authed: true, name: name, id: '' });
+        return;
+      }
+      if (loginEl) {
+        post({ type: 'authState', authed: false });
+        setTimeout(function () {
+          try { loginEl.click(); }
+          catch (e) {
+            var h = loginEl.getAttribute && loginEl.getAttribute('href');
+            if (h && h.charAt(0) !== '#') { window.location.href = h; }
+          }
+        }, 80);
+        return;
+      }
+      // Header/controls may not be rendered yet — retry a few times before
+      // giving up, so a slightly slow page doesn't stall login detection.
+      if (attempts < 8) { setTimeout(probe, 400); return; }
       post({ type: 'authState', authed: false, noControls: true });
+    } catch (e) {
+      if (attempts < 8) { setTimeout(probe, 400); return; }
+      post({ type: 'authState', authed: false, error: String(e) });
     }
-  } catch (e) {
-    post({ type: 'authState', authed: false, error: String(e) });
   }
+  probe();
   true;
 })();
 `;

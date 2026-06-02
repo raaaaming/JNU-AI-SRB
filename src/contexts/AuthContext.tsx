@@ -11,8 +11,16 @@ import type { AuthState } from '../types';
 
 const STORAGE_KEY = 'auth_state';
 
-/** Session duration: 8 hours in milliseconds */
-const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+/**
+ * Session duration: 30 days.
+ *
+ * The school SSO supports registering a "trusted device" at code entry, which
+ * keeps the session alive for ~1 month via the WebView's persisted cookies. We
+ * match that window here so the app doesn't sign the user out while their SSO
+ * session is still valid. (If the SSO cookie actually expires sooner, the
+ * bridge's data calls will fail and the user is routed back to login anyway.)
+ */
+const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const DEFAULT_STATE: AuthState = {
   isLoggedIn: false,
