@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "전남대 AI 스터디룸",
+    "slug": "jnu-ai-srb",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.jnu.ai.srb"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#003087"
+      },
+      "package": "com.jnu.ai.srb",
+      "usesCleartextTraffic": true
+    },
+    "plugins": ["expo-router"],
+    "scheme": "jnu-ai-srb",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
