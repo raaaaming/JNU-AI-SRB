@@ -3,6 +3,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { SessionBridgeProvider } from '@/contexts/SessionBridge';
 
 /**
  * Inner component that owns the auth-based routing guard.
@@ -54,7 +55,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <RootNavigator />
+          <SessionBridgeProvider>
+            <RootNavigator />
+          </SessionBridgeProvider>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

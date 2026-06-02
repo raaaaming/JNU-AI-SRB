@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,14 +13,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import WebView, { type WebViewMessageEvent } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/hooks/useAuth';
-import { URLS } from '@/constants/urls';
+import { useSessionBridge } from '@/contexts/SessionBridge';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '@/constants/theme';
 import { ROOMS, PURPOSE_OPTIONS, MEMBER_LIMITS, generateSlots } from '@/constants/booking';
-import { buildSubmitScript, buildProbeScript } from '@/services/bookingService';
+import { submitScript, probeDayScript } from '@/services/bookingService';
 import type { BookingFormData, BookingMember } from '@/types';
 import { Field, TextField, Stepper, SelectField, type SelectItem } from '@/components/forms';
 
@@ -60,8 +59,7 @@ export default function BookingScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ reserveDt?: string; facilitySeq?: string }>();
 
-  const webRef = useRef<WebView>(null);
-  const [webReady, setWebReady] = useState(false);
+  const bridge = useSessionBridge();
   const [submitting, setSubmitting] = useState(false);
   const [probing, setProbing] = useState(false);
   const [progressStep, setProgressStep] = useState<string>('');
@@ -103,12 +101,41 @@ export default function BookingScreen() {
 
   // Probe the live form for real availability whenever room/date changes.
   useEffect(() => {
-    if (!webReady || submitting) return;
+    if (!bridge.ready || submitting) return;
+    let cancelled = false;
     setProbing(true);
     setAvailableSlots(null);
     setProgressStep('day');
-    webRef.current?.injectJavaScript(buildProbeScript(facilitySeq, reserveDt));
-  }, [webReady, facilitySeq, reserveDt, submitting]);
+
+    bridge
+      .run<{ available: string[]; purposes: SelectItem[] }>(
+        (reqId) => probeDayScript(reqId, facilitySeq, reserveDt),
+        { timeoutMs: 20000, onProgress: (step) => !cancelled && setProgressStep(step) },
+      )
+      .then((data) => {
+        if (cancelled) return;
+        const available = Array.isArray(data.available) ? data.available : [];
+        setAvailableSlots(available);
+        setSelectedTimes((prev) => prev.filter((s) => available.includes(s)));
+        if (Array.isArray(data.purposes) && data.purposes.length > 0) {
+          setPurposeOptions(data.purposes);
+          setPurpose((p) => (data.purposes.some((o) => o.value === p) ? p : data.purposes[0].value));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableSlots([]); // treat as "none available"
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProbing(false);
+          setProgressStep('');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, facilitySeq, reserveDt, submitting]);
 
   const toggleTime = useCallback((slot: string) => {
     setSelectedTimes((prev) =>
@@ -136,7 +163,7 @@ export default function BookingScreen() {
       Alert.alert('입력 확인', error);
       return;
     }
-    if (!webReady) {
+    if (!bridge.ready) {
       Alert.alert('잠시만요', '예약 시스템에 연결 중입니다. 잠시 후 다시 시도해주세요.');
       return;
     }
@@ -161,57 +188,32 @@ export default function BookingScreen() {
           onPress: () => {
             setSubmitting(true);
             setProgressStep('facility');
-            webRef.current?.injectJavaScript(buildSubmitScript(data));
+            bridge
+              .run<{ success: boolean; message: string }>(
+                (reqId) => submitScript(reqId, data),
+                { timeoutMs: 30000, onProgress: setProgressStep },
+              )
+              .then((res) => {
+                if (res.success) {
+                  Alert.alert('신청 완료', res.message ?? '예약이 접수되었습니다.', [
+                    { text: '확인', onPress: () => router.back() },
+                  ]);
+                } else {
+                  Alert.alert('신청 실패', res.message ?? '예약에 실패했습니다.');
+                }
+              })
+              .catch((e: any) => {
+                Alert.alert('오류', e?.message ?? '예약 신청 중 문제가 발생했습니다.');
+              })
+              .finally(() => {
+                setSubmitting(false);
+                setProgressStep('');
+              });
           },
         },
       ],
     );
-  }, [validate, webReady, facilitySeq, reserveDt, selectedTimes, memberCount, members, contact, purpose]);
-
-  const handleMessage = useCallback(
-    (event: WebViewMessageEvent) => {
-      let msg: any;
-      try {
-        msg = JSON.parse(event.nativeEvent.data);
-      } catch {
-        return;
-      }
-
-      switch (msg.type) {
-        case 'progress':
-          setProgressStep(msg.step);
-          break;
-
-        case 'slotInfo': {
-          setProbing(false);
-          setProgressStep('');
-          const available: string[] = Array.isArray(msg.available) ? msg.available : [];
-          setAvailableSlots(available);
-          // Drop any selected slots that are no longer available
-          setSelectedTimes((prev) => prev.filter((s) => available.includes(s)));
-          // Adopt the server's real purpose options if provided
-          if (Array.isArray(msg.purposes) && msg.purposes.length > 0) {
-            setPurposeOptions(msg.purposes);
-            setPurpose((p) => (msg.purposes.some((o: SelectItem) => o.value === p) ? p : msg.purposes[0].value));
-          }
-          break;
-        }
-
-        case 'bookingResult':
-          setSubmitting(false);
-          setProgressStep('');
-          if (msg.ok) {
-            Alert.alert('신청 완료', msg.message ?? '예약이 접수되었습니다.', [
-              { text: '확인', onPress: () => router.back() },
-            ]);
-          } else {
-            Alert.alert('신청 실패', msg.message ?? '예약에 실패했습니다.');
-          }
-          break;
-      }
-    },
-    [router],
-  );
+  }, [validate, bridge, facilitySeq, reserveDt, selectedTimes, memberCount, members, contact, purpose, router]);
 
   // Which slots to show: real availability if known, else the full set.
   const slotsToShow = availableSlots ?? allSlots;
@@ -343,22 +345,6 @@ export default function BookingScreen() {
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* Hidden WebView on the cvg domain — drives the real form so the SSO
-          session cookie + page token are used automatically. */}
-      <View style={styles.hiddenWeb} pointerEvents="none">
-        <WebView
-          ref={webRef}
-          source={{ uri: URLS.BOOKING_CALENDAR }}
-          sharedCookiesEnabled
-          thirdPartyCookiesEnabled
-          javaScriptEnabled
-          domStorageEnabled
-          onLoadEnd={() => setWebReady(true)}
-          onMessage={handleMessage}
-          mixedContentMode={Platform.OS === 'android' ? 'compatibility' : undefined}
-        />
-      </View>
     </SafeAreaView>
   );
 }
@@ -427,6 +413,4 @@ const styles = StyleSheet.create({
   submitText: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textOnPrimary },
 
   disclaimer: { marginTop: Spacing.lg, fontSize: Typography.fontSizeXs, color: Colors.textSecondary, lineHeight: 18, textAlign: 'center' },
-
-  hiddenWeb: { position: 'absolute', width: 1, height: 1, bottom: 0, right: 0, opacity: 0 },
 });
