@@ -65,6 +65,24 @@ export interface DaySlotInfo {
   purposes: { label: string; value: string }[];
 }
 
+/** One row from the "내 예약" (myList.do) page. */
+export interface MyReservation {
+  /** 게시글/예약 식별자 (jf_artclView의 두 번째 인자) */
+  seq: string;
+  /** 목록 번호 */
+  no: string;
+  /** 시설명 (룸) */
+  room: string;
+  /** 예약일 "YYYY-MM-DD" */
+  date: string;
+  /** 시간 "HH:MM~HH:MM" */
+  time: string;
+  /** 신청일 "YYYY-MM-DD" */
+  appliedDate: string;
+  /** 승인여부 원문 (예: "승인", "대기") */
+  status: string;
+}
+
 /** Result of a reservation submission attempt. */
 export type BookingResult =
   | { ok: true; message?: string }

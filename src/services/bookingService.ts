@@ -18,6 +18,55 @@
 
 import type { BookingFormData } from '../types';
 
+/**
+ * Fetches the "내 예약" (myList.do) page from inside the authenticated bridge
+ * page via a same-origin fetch, then scrapes the reservation table. This does
+ * NOT navigate the bridge WebView, so it never disturbs the calendar state.
+ *
+ * Resolves with: { reservations: MyReservation[] }
+ */
+export function myReservationsScript(reqId: string, listUrl: string): string {
+  return `
+(function() {
+  var REQ = ${JSON.stringify(reqId)};
+  function post(o) { if (window.ReactNativeWebView) { o.__bridge = REQ; window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
+  function ok(d) { post({ kind: 'result', ok: true, data: d }); }
+  function err(m) { post({ kind: 'result', ok: false, error: m }); }
+  try {
+    fetch(${JSON.stringify(listUrl)}, { credentials: 'include' })
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var anchors = doc.querySelectorAll('a[href*="jf_artclView"]');
+        var out = [];
+        for (var i = 0; i < anchors.length; i++) {
+          var a = anchors[i];
+          var tr = a.closest ? a.closest('tr') : null;
+          if (!tr) continue;
+          var tds = tr.querySelectorAll('td');
+          if (tds.length < 6) continue;
+          var m = (a.getAttribute('href') || '').match(/jf_artclView\\([^,]*,\\s*'?([0-9]+)'?\\)/);
+          out.push({
+            seq: m ? m[1] : '',
+            no: ((tds[0].textContent || '').replace(/[^0-9]/g, '')),
+            room: (a.textContent || '').trim(),
+            date: (tds[2].textContent || '').trim(),
+            time: (tds[3].textContent || '').trim(),
+            appliedDate: (tds[4].textContent || '').trim(),
+            status: (tds[5].textContent || '').replace(/\\s+/g, ' ').trim()
+          });
+        }
+        ok({ reservations: out });
+      })
+      .catch(function (e) { err('내 예약을 불러오지 못했습니다: ' + (e && e.message ? e.message : '')); });
+  } catch (e) {
+    err('내 예약 조회 중 오류가 발생했습니다.');
+  }
+  true;
+})();
+`;
+}
+
 /** Per-day availability scraped from the calendar table. */
 export interface DayAvailability {
   day: number;
