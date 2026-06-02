@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import WebView, {
 import { useAuth } from '@/hooks/useAuth';
 import { URLS } from '@/constants/urls';
 import { Colors, Typography, Spacing } from '@/constants/theme';
-import { EXTRACT_USER_SCRIPT } from '@/utils/webviewScripts';
+import { AUTH_PROBE_SCRIPT } from '@/utils/webviewScripts';
 
 /**
  * Login screen.
@@ -33,22 +33,16 @@ export default function LoginScreen() {
   const webViewRef = useRef<WebView>(null);
 
   const [isLoading, setIsLoading] = useState(true);
-  // Ensures we navigate into the app exactly once, no matter how many
-  // times the success URL fires or whether user-info arrives first.
+  // Ensures we navigate into the app exactly once.
   const completedRef = useRef(false);
-  // Tracks the fallback timer so it can be cancelled if user-info arrives.
-  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Avoids re-probing the same cvg URL repeatedly (which could click login twice).
+  const lastProbedUrlRef = useRef<string>('');
 
   /** Finalize login exactly once: persist auth, then enter the app. */
   const completeLogin = useCallback(
     (name?: string, id?: string) => {
       if (completedRef.current) return;
       completedRef.current = true;
-
-      if (fallbackTimerRef.current) {
-        clearTimeout(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
 
       auth.login(name || undefined, id || undefined).then(() => {
         router.replace('/(tabs)/');
@@ -57,44 +51,39 @@ export default function LoginScreen() {
     [auth, router],
   );
 
-  /** Called when the SSO WebView navigates to a new URL. */
-  const handleNavigationStateChange = useCallback(
-    (navState: WebViewNavigation) => {
-      const url = navState.url ?? '';
+  /** Called when the WebView navigates to a new URL. */
+  const handleNavigationStateChange = useCallback((navState: WebViewNavigation) => {
+    const url = navState.url ?? '';
 
-      // Login succeeds once the page actually lands ON the cvg origin
-      // (not merely mentions it in a returnUrl query param while still on
-      // the SSO host). Match the scheme+host prefix, not a substring.
-      const onBookingOrigin =
-        url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
+    // Match the cvg origin by scheme+host prefix (not a substring, so a cvg
+    // returnUrl param while still on the SSO host doesn't count).
+    const onBookingOrigin =
+      url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
 
-      // Only when the page has fully settled — while the SSO round-trip is
-      // still redirecting, navState.loading is true and the URL may flicker
-      // through cvg before bouncing to the SSO host. Waiting for the load to
-      // finish avoids that false positive.
-      if (onBookingOrigin && !navState.loading && !completedRef.current) {
-        // Try to scrape user info from the page before we navigate away
-        webViewRef.current?.injectJavaScript(EXTRACT_USER_SCRIPT);
-
-        // If userInfo postMessage doesn't arrive within 1.5 s,
-        // proceed without it so the user isn't left waiting.
-        if (!fallbackTimerRef.current) {
-          fallbackTimerRef.current = setTimeout(() => completeLogin(), 1500);
-        }
+    // Landing on cvg is NOT proof of login — its calendar is publicly
+    // viewable. Once the page settles, probe it: AUTH_PROBE_SCRIPT reports
+    // whether we're authenticated (→ finish login) and, if not, clicks the
+    // page's own login link to start the real SSO flow. Probe once per URL.
+    if (onBookingOrigin && !navState.loading && !completedRef.current) {
+      if (lastProbedUrlRef.current !== url) {
+        lastProbedUrlRef.current = url;
+        webViewRef.current?.injectJavaScript(AUTH_PROBE_SCRIPT);
       }
-    },
-    [completeLogin],
-  );
+    }
+  }, []);
 
-  /** Handles postMessages sent from injected JS (e.g. EXTRACT_USER_SCRIPT). */
+  /** Handles postMessages sent from injected JS (AUTH_PROBE_SCRIPT). */
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
       try {
         const data = JSON.parse(event.nativeEvent.data);
 
-        if (data.type === 'userInfo') {
-          const { name, id } = data as { type: 'userInfo'; name: string; id: string };
-          completeLogin(name, id);
+        if (data.type === 'authState') {
+          if (data.authed) {
+            completeLogin(data.name, data.id);
+          }
+          // If not authenticated, the probe has already clicked the login
+          // link; we wait for SSO to round-trip back to cvg and re-probe.
         }
       } catch {
         // Malformed message — ignore
@@ -102,13 +91,6 @@ export default function LoginScreen() {
     },
     [completeLogin],
   );
-
-  // Clean up the fallback timer if the screen unmounts mid-login
-  useEffect(() => {
-    return () => {
-      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-    };
-  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>

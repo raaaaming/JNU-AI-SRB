@@ -150,6 +150,63 @@ export const EXTRACT_USER_SCRIPT = `
 `;
 
 /**
+ * Probes a cvg.jnu.ac.kr page to decide whether the SSO session is actually
+ * authenticated — landing on cvg is NOT proof, because the facility calendar
+ * is publicly viewable.
+ *
+ *  - If a "로그아웃" control exists → authenticated. Reads the user's name and
+ *    posts { type: 'authState', authed: true, name, id }.
+ *  - Else if a "로그인" control exists → not authenticated. Posts
+ *    { type: 'authState', authed: false } and clicks it to launch the site's
+ *    own SSO login (which returns to cvg, not the generic portal).
+ *  - Else posts { type: 'authState', authed: false, noControls: true }.
+ */
+export const AUTH_PROBE_SCRIPT = `
+(function() {
+  function post(o) { if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
+  try {
+    var nodes = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
+    var logoutEl = null, loginEl = null;
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var t = (el.textContent || el.value || '').replace(/\\s+/g, '');
+      var attr = (((el.getAttribute && el.getAttribute('onclick')) || '') + ' ' +
+                  ((el.getAttribute && el.getAttribute('href')) || '')).toLowerCase();
+      var isLogout = t.indexOf('로그아웃') >= 0 || attr.indexOf('logout') >= 0;
+      var isLogin = !isLogout && (t.indexOf('로그인') >= 0 ||
+                    (attr.indexOf('login') >= 0 && attr.indexOf('logout') < 0));
+      if (!logoutEl && isLogout) logoutEl = el;
+      if (!loginEl && isLogin) loginEl = el;
+    }
+    if (logoutEl) {
+      var name = '';
+      var nameSel = ['.user_name', '.userName', '#userName', '.member_name',
+        '.login_name', '[class*="user_nm"]', '[class*="userNm"]'];
+      for (var n = 0; n < nameSel.length; n++) {
+        var ne = document.querySelector(nameSel[n]);
+        if (ne && ne.textContent && ne.textContent.trim()) { name = ne.textContent.trim(); break; }
+      }
+      post({ type: 'authState', authed: true, name: name, id: '' });
+    } else if (loginEl) {
+      post({ type: 'authState', authed: false });
+      setTimeout(function () {
+        try { loginEl.click(); }
+        catch (e) {
+          var h = loginEl.getAttribute && loginEl.getAttribute('href');
+          if (h && h.charAt(0) !== '#') { window.location.href = h; }
+        }
+      }, 80);
+    } else {
+      post({ type: 'authState', authed: false, noControls: true });
+    }
+  } catch (e) {
+    post({ type: 'authState', authed: false, error: String(e) });
+  }
+  true;
+})();
+`;
+
+/**
  * Builds a combined injection script that includes CLEANUP_SCRIPT
  * plus any additional custom CSS provided by the caller.
  *

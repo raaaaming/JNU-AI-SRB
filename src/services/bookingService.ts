@@ -86,6 +86,9 @@ export function logoutScript(reqId: string): string {
   var REQ = ${JSON.stringify(reqId)};
   function post(o) { if (window.ReactNativeWebView) { o.__bridge = REQ; window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
   try {
+    // Some logout handlers gate on confirm("...") — in a WebView that returns
+    // false (cancel) by default, silently aborting the logout. Force it through.
+    try { window.confirm = function () { return true; }; window.alert = function () {}; } catch (e) {}
     var nodes = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
     var target = null;
     for (var i = 0; i < nodes.length; i++) {
