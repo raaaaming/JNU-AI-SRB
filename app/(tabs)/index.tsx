@@ -76,6 +76,17 @@ export default function BookingScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* ── Native booking CTA ── */}
+      <TouchableOpacity
+        style={styles.bookingCta}
+        onPress={() => router.push('/booking')}
+        accessibilityRole="button"
+        accessibilityLabel="예약 신청하기"
+      >
+        <Ionicons name="add-circle" size={20} color={Colors.textOnPrimary} />
+        <Text style={styles.bookingCtaText}>예약 신청하기</Text>
+      </TouchableOpacity>
+
       {/* ── WebView ── */}
       <View style={styles.webViewContainer}>
         <WebView
@@ -139,6 +150,21 @@ const styles = StyleSheet.create({
   },
   refreshLabel: {
     fontSize: Typography.fontSizeSm,
+    color: Colors.textOnPrimary,
+  },
+
+  // ── Booking CTA ──
+  bookingCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.secondary,
+    paddingVertical: Spacing.md,
+  },
+  bookingCtaText: {
+    fontSize: Typography.fontSizeMd,
+    fontWeight: Typography.fontWeightSemibold,
     color: Colors.textOnPrimary,
   },
 

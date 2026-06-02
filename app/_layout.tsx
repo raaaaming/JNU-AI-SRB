@@ -21,14 +21,14 @@ function RootNavigator() {
     // Wait until the persisted auth state has been read
     if (auth.isLoading) return;
 
-    const inAuthGroup = segments[0] === '(tabs)';
     const onLoginPage = segments[0] === 'login';
 
     if (!auth.isLoggedIn && !onLoginPage) {
       // Not logged in → go to login
       router.replace('/login');
-    } else if (auth.isLoggedIn && !inAuthGroup) {
-      // Already logged in → go to main app
+    } else if (auth.isLoggedIn && onLoginPage) {
+      // Logged in but still on the login page → enter the app.
+      // (Other authed routes like /booking are left alone.)
       router.replace('/(tabs)/');
     }
   }, [auth.isLoggedIn, auth.isLoading, segments, router]);
@@ -41,6 +41,7 @@ function RootNavigator() {
       <Stack.Screen name="index" />
       <Stack.Screen name="login" />
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="booking" options={{ presentation: 'modal' }} />
     </Stack>
   );
 }
