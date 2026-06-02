@@ -19,26 +19,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/hooks/useAuth';
 import { URLS } from '@/constants/urls';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '@/constants/theme';
-import {
-  ROOMS,
-  PURPOSE_OPTIONS,
-  MEMBER_LIMITS,
-  generateTimeSlots,
-} from '@/constants/booking';
-import { buildSubmitScript } from '@/services/bookingService';
+import { ROOMS, PURPOSE_OPTIONS, MEMBER_LIMITS, generateSlots } from '@/constants/booking';
+import { buildSubmitScript, buildProbeScript } from '@/services/bookingService';
 import type { BookingFormData, BookingMember } from '@/types';
-import { Field, TextField, Stepper, SelectField } from '@/components/forms';
+import { Field, TextField, Stepper, SelectField, type SelectItem } from '@/components/forms';
 
 /** Formats a Date as "YYYY-MM-DD". */
 function toISODate(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /** Builds the next `count` selectable dates starting today. */
-function upcomingDates(count: number) {
-  const out: { label: string; value: string }[] = [];
+function upcomingDates(count: number): SelectItem[] {
+  const out: SelectItem[] = [];
   const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
   const base = new Date();
   for (let i = 0; i < count; i++) {
@@ -53,34 +46,45 @@ function upcomingDates(count: number) {
   return out;
 }
 
+/** Friendly label for each navigation/submit progress step. */
+const STEP_LABEL: Record<string, string> = {
+  facility: '스터디룸 확인 중…',
+  month: '날짜로 이동 중…',
+  day: '시간표 불러오는 중…',
+  fill: '예약 정보 입력 중…',
+  submit: '예약 신청 중…',
+};
+
 export default function BookingScreen() {
   const auth = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams<{ reserveDt?: string; facilitySeq?: string }>();
 
-  const submitWebRef = useRef<WebView>(null);
+  const webRef = useRef<WebView>(null);
   const [webReady, setWebReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [progressStep, setProgressStep] = useState<string>('');
 
   // ── Form state ──
-  const dateOptions = useMemo(() => upcomingDates(30), []);
-  const timeStartOptions = useMemo(() => generateTimeSlots(false), []);
-  const timeEndOptions = useMemo(() => generateTimeSlots(true), []);
+  const dateOptions = useMemo(() => upcomingDates(14), []);
+  const allSlots = useMemo(() => generateSlots(), []);
 
   const [facilitySeq, setFacilitySeq] = useState<number>(
     params.facilitySeq ? Number(params.facilitySeq) : ROOMS[0].facilitySeq,
   );
-  const [reserveDt, setReserveDt] = useState<string>(
-    params.reserveDt ?? dateOptions[0].value,
-  );
-  const [startTime, setStartTime] = useState<string>(timeStartOptions[0]);
-  const [endTime, setEndTime] = useState<string>(timeStartOptions[1] ?? timeStartOptions[0]);
+  const [reserveDt, setReserveDt] = useState<string>(params.reserveDt ?? dateOptions[0].value);
+  const [selectedTimes, setSelectedTimes] = useState<string[]>([]);
   const [memberCount, setMemberCount] = useState<number>(MEMBER_LIMITS.min);
   const [members, setMembers] = useState<BookingMember[]>([
     { name: auth.userName ?? '', studentNo: auth.userId ?? '' },
   ]);
   const [contact, setContact] = useState<string>('');
   const [purpose, setPurpose] = useState<string>(PURPOSE_OPTIONS[0].value);
+  const [purposeOptions, setPurposeOptions] = useState<SelectItem[]>(PURPOSE_OPTIONS);
+
+  // Real availability reported by the live form (null = not yet probed).
+  const [availableSlots, setAvailableSlots] = useState<string[] | null>(null);
 
   // Keep the members array length in sync with memberCount
   useEffect(() => {
@@ -93,17 +97,29 @@ export default function BookingScreen() {
     });
   }, [memberCount]);
 
-  const updateMember = useCallback(
-    (index: number, patch: Partial<BookingMember>) => {
-      setMembers((prev) => prev.map((m, i) => (i === index ? { ...m, ...patch } : m)));
-    },
-    [],
-  );
+  const updateMember = useCallback((index: number, patch: Partial<BookingMember>) => {
+    setMembers((prev) => prev.map((m, i) => (i === index ? { ...m, ...patch } : m)));
+  }, []);
+
+  // Probe the live form for real availability whenever room/date changes.
+  useEffect(() => {
+    if (!webReady || submitting) return;
+    setProbing(true);
+    setAvailableSlots(null);
+    setProgressStep('day');
+    webRef.current?.injectJavaScript(buildProbeScript(facilitySeq, reserveDt));
+  }, [webReady, facilitySeq, reserveDt, submitting]);
+
+  const toggleTime = useCallback((slot: string) => {
+    setSelectedTimes((prev) =>
+      prev.includes(slot) ? prev.filter((s) => s !== slot) : [...prev, slot].sort(),
+    );
+  }, []);
 
   // ── Validation ──
   const validate = useCallback((): string | null => {
     if (!reserveDt) return '예약 날짜를 선택해주세요.';
-    if (startTime >= endTime) return '종료 시간은 시작 시간보다 늦어야 합니다.';
+    if (selectedTimes.length === 0) return '예약 시간을 1개 이상 선택해주세요.';
     for (let i = 0; i < members.length; i++) {
       if (!members[i].name.trim()) return `${i + 1}번 예약자의 이름을 입력해주세요.`;
       if (!members[i].studentNo.trim()) return `${i + 1}번 예약자의 학번을 입력해주세요.`;
@@ -111,9 +127,9 @@ export default function BookingScreen() {
     if (!contact.trim()) return '연락처를 입력해주세요.';
     if (!purpose) return '이용 목적을 선택해주세요.';
     return null;
-  }, [reserveDt, startTime, endTime, members, contact, purpose]);
+  }, [reserveDt, selectedTimes, members, contact, purpose]);
 
-  // ── Submit flow ──
+  // ── Submit ──
   const handleSubmit = useCallback(() => {
     const error = validate();
     if (error) {
@@ -128,8 +144,7 @@ export default function BookingScreen() {
     const data: BookingFormData = {
       facilitySeq,
       reserveDt,
-      startTime,
-      endTime,
+      times: selectedTimes,
       memberCount,
       members,
       contact: contact.trim(),
@@ -138,26 +153,53 @@ export default function BookingScreen() {
 
     Alert.alert(
       '예약 신청',
-      `${reserveDt} ${startTime}~${endTime}\n인원 ${memberCount}명으로 신청하시겠습니까?`,
+      `${reserveDt}\n${selectedTimes.join(', ')}\n인원 ${memberCount}명으로 신청하시겠습니까?`,
       [
         { text: '취소', style: 'cancel' },
         {
           text: '신청',
           onPress: () => {
             setSubmitting(true);
-            submitWebRef.current?.injectJavaScript(buildSubmitScript(data));
+            setProgressStep('facility');
+            webRef.current?.injectJavaScript(buildSubmitScript(data));
           },
         },
       ],
     );
-  }, [validate, webReady, facilitySeq, reserveDt, startTime, endTime, memberCount, members, contact, purpose]);
+  }, [validate, webReady, facilitySeq, reserveDt, selectedTimes, memberCount, members, contact, purpose]);
 
-  const handleSubmitMessage = useCallback(
+  const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      let msg: any;
       try {
-        const msg = JSON.parse(event.nativeEvent.data);
-        if (msg.type === 'bookingResult') {
+        msg = JSON.parse(event.nativeEvent.data);
+      } catch {
+        return;
+      }
+
+      switch (msg.type) {
+        case 'progress':
+          setProgressStep(msg.step);
+          break;
+
+        case 'slotInfo': {
+          setProbing(false);
+          setProgressStep('');
+          const available: string[] = Array.isArray(msg.available) ? msg.available : [];
+          setAvailableSlots(available);
+          // Drop any selected slots that are no longer available
+          setSelectedTimes((prev) => prev.filter((s) => available.includes(s)));
+          // Adopt the server's real purpose options if provided
+          if (Array.isArray(msg.purposes) && msg.purposes.length > 0) {
+            setPurposeOptions(msg.purposes);
+            setPurpose((p) => (msg.purposes.some((o: SelectItem) => o.value === p) ? p : msg.purposes[0].value));
+          }
+          break;
+        }
+
+        case 'bookingResult':
           setSubmitting(false);
+          setProgressStep('');
           if (msg.ok) {
             Alert.alert('신청 완료', msg.message ?? '예약이 접수되었습니다.', [
               { text: '확인', onPress: () => router.back() },
@@ -165,13 +207,15 @@ export default function BookingScreen() {
           } else {
             Alert.alert('신청 실패', msg.message ?? '예약에 실패했습니다.');
           }
-        }
-      } catch {
-        // ignore malformed
+          break;
       }
     },
     [router],
   );
+
+  // Which slots to show: real availability if known, else the full set.
+  const slotsToShow = availableSlots ?? allSlots;
+  const noSlots = availableSlots !== null && availableSlots.length === 0;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -186,72 +230,63 @@ export default function BookingScreen() {
         <View style={styles.headerBtn} />
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           {/* Room */}
-          {ROOMS.length > 1 ? (
-            <Field label="스터디룸" required>
-              <SelectField
-                value={String(facilitySeq)}
-                items={ROOMS.map((r) => ({ label: r.label, value: String(r.facilitySeq) }))}
-                onSelect={(v) => setFacilitySeq(Number(v))}
-              />
-            </Field>
-          ) : (
-            <Field label="스터디룸">
-              <View style={styles.readonlyBox}>
-                <Ionicons name="business-outline" size={18} color={Colors.primary} />
-                <Text style={styles.readonlyText}>{ROOMS[0].label}</Text>
-              </View>
-            </Field>
-          )}
-
-          {/* Date */}
-          <Field label="예약 날짜" required>
+          <Field label="스터디룸" required>
             <SelectField
-              value={reserveDt}
-              items={dateOptions}
-              onSelect={setReserveDt}
+              value={String(facilitySeq)}
+              items={ROOMS.map((r) => ({ label: r.label, value: String(r.facilitySeq) }))}
+              onSelect={(v) => setFacilitySeq(Number(v))}
             />
           </Field>
 
-          {/* Time */}
-          <View style={styles.row}>
-            <View style={styles.rowItem}>
-              <Field label="시작 시간" required>
-                <SelectField
-                  value={startTime}
-                  items={timeStartOptions.map((t) => ({ label: t, value: t }))}
-                  onSelect={setStartTime}
-                />
-              </Field>
-            </View>
-            <View style={styles.rowItem}>
-              <Field label="종료 시간" required>
-                <SelectField
-                  value={endTime}
-                  items={timeEndOptions.map((t) => ({ label: t, value: t }))}
-                  onSelect={setEndTime}
-                />
-              </Field>
-            </View>
-          </View>
+          {/* Date */}
+          <Field label="예약 날짜" required>
+            <SelectField value={reserveDt} items={dateOptions} onSelect={setReserveDt} />
+          </Field>
+
+          {/* Time slots */}
+          <Field
+            label="예약 시간"
+            required
+            hint={
+              availableSlots !== null
+                ? '학교 시스템의 실제 예약 가능 시간입니다.'
+                : '예약 가능 시간을 확인하는 중입니다…'
+            }
+          >
+            {probing ? (
+              <View style={styles.slotLoading}>
+                <ActivityIndicator color={Colors.primary} />
+                <Text style={styles.slotLoadingText}>{STEP_LABEL[progressStep] ?? '불러오는 중…'}</Text>
+              </View>
+            ) : noSlots ? (
+              <View style={styles.slotEmpty}>
+                <Ionicons name="alert-circle-outline" size={18} color={Colors.error} />
+                <Text style={styles.slotEmptyText}>이 날짜는 예약 가능한 시간이 없습니다.</Text>
+              </View>
+            ) : (
+              <View style={styles.slotGrid}>
+                {slotsToShow.map((slot) => {
+                  const selected = selectedTimes.includes(slot);
+                  return (
+                    <TouchableOpacity
+                      key={slot}
+                      style={[styles.slotChip, selected && styles.slotChipSelected]}
+                      onPress={() => toggleTime(slot)}
+                    >
+                      <Text style={[styles.slotChipText, selected && styles.slotChipTextSelected]}>{slot}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </Field>
 
           {/* Member count */}
           <Field label="사용 인원" required hint={`최소 ${MEMBER_LIMITS.min}명 ~ 최대 ${MEMBER_LIMITS.max}명`}>
-            <Stepper
-              value={memberCount}
-              min={MEMBER_LIMITS.min}
-              max={MEMBER_LIMITS.max}
-              onChange={setMemberCount}
-            />
+            <Stepper value={memberCount} min={MEMBER_LIMITS.min} max={MEMBER_LIMITS.max} onChange={setMemberCount} />
           </Field>
 
           {/* Members */}
@@ -260,12 +295,7 @@ export default function BookingScreen() {
               <View key={i} style={styles.memberRow}>
                 <Text style={styles.memberIndex}>{i + 1}</Text>
                 <View style={styles.memberInputs}>
-                  <TextField
-                    placeholder="이름"
-                    value={m.name}
-                    onChangeText={(t) => updateMember(i, { name: t })}
-                    style={styles.memberName}
-                  />
+                  <TextField placeholder="이름" value={m.name} onChangeText={(t) => updateMember(i, { name: t })} style={styles.memberName} />
                   <TextField
                     placeholder="학번"
                     value={m.studentNo}
@@ -280,36 +310,30 @@ export default function BookingScreen() {
 
           {/* Contact */}
           <Field label="연락처" required>
-            <TextField
-              placeholder="010-0000-0000"
-              value={contact}
-              onChangeText={setContact}
-              keyboardType="phone-pad"
-            />
+            <TextField placeholder="010-0000-0000" value={contact} onChangeText={setContact} keyboardType="phone-pad" />
           </Field>
 
           {/* Purpose */}
           <Field label="이용 목적" required>
-            <SelectField
-              value={purpose}
-              items={PURPOSE_OPTIONS}
-              onSelect={setPurpose}
-            />
+            <SelectField value={purpose} items={purposeOptions} onSelect={setPurpose} />
           </Field>
 
           {/* Submit */}
           <TouchableOpacity
-            style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
+            style={[styles.submitBtn, (submitting || noSlots) && styles.submitBtnDisabled]}
             onPress={handleSubmit}
-            disabled={submitting}
+            disabled={submitting || noSlots}
           >
             {submitting ? (
-              <ActivityIndicator color={Colors.textOnPrimary} />
+              <View style={styles.submitInner}>
+                <ActivityIndicator color={Colors.textOnPrimary} />
+                <Text style={styles.submitText}>{STEP_LABEL[progressStep] ?? '신청 중…'}</Text>
+              </View>
             ) : (
-              <>
+              <View style={styles.submitInner}>
                 <Ionicons name="checkmark-circle-outline" size={20} color={Colors.textOnPrimary} />
                 <Text style={styles.submitText}>예약 신청하기</Text>
-              </>
+              </View>
             )}
           </TouchableOpacity>
 
@@ -320,18 +344,18 @@ export default function BookingScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Hidden WebView on cvg domain — performs the authenticated POST so the
-          SSO session cookie is included. Kept tiny + invisible. */}
+      {/* Hidden WebView on the cvg domain — drives the real form so the SSO
+          session cookie + page token are used automatically. */}
       <View style={styles.hiddenWeb} pointerEvents="none">
         <WebView
-          ref={submitWebRef}
+          ref={webRef}
           source={{ uri: URLS.BOOKING_CALENDAR }}
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
           javaScriptEnabled
           domStorageEnabled
           onLoadEnd={() => setWebReady(true)}
-          onMessage={handleSubmitMessage}
+          onMessage={handleMessage}
           mixedContentMode={Platform.OS === 'android' ? 'compatibility' : undefined}
         />
       </View>
@@ -352,30 +376,30 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
   },
   headerBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: {
-    fontSize: Typography.fontSizeLg,
-    fontWeight: Typography.fontWeightBold,
-    color: Colors.textOnPrimary,
-  },
+  headerTitle: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textOnPrimary },
 
   scroll: { flex: 1, backgroundColor: Colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   scrollContent: { padding: Spacing.lg, paddingBottom: Spacing.xxxl },
 
-  row: { flexDirection: 'row', gap: Spacing.md },
-  rowItem: { flex: 1 },
-
-  readonlyBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.surfaceVariant,
-    borderRadius: BorderRadius.md,
+  // Time slots
+  slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  slotChip: {
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
-    minHeight: 48,
+    paddingVertical: Spacing.sm,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
   },
-  readonlyText: { fontSize: Typography.fontSizeMd, color: Colors.textPrimary, fontWeight: Typography.fontWeightMedium },
+  slotChipSelected: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  slotChipText: { fontSize: Typography.fontSizeSm, color: Colors.textPrimary },
+  slotChipTextSelected: { color: Colors.textOnPrimary, fontWeight: Typography.fontWeightSemibold },
+  slotLoading: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
+  slotLoadingText: { fontSize: Typography.fontSizeSm, color: Colors.textSecondary },
+  slotEmpty: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
+  slotEmptyText: { fontSize: Typography.fontSizeSm, color: Colors.error },
 
+  // Members
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.sm },
   memberIndex: {
     width: 24,
@@ -388,39 +412,21 @@ const styles = StyleSheet.create({
   memberName: { flex: 1.2 },
   memberNo: { flex: 1 },
 
+  // Submit
   submitBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
     backgroundColor: Colors.primary,
     borderRadius: BorderRadius.lg,
     paddingVertical: Spacing.lg,
     marginTop: Spacing.md,
     minHeight: 54,
+    justifyContent: 'center',
     ...Shadow.sm,
   },
   submitBtnDisabled: { opacity: 0.6 },
-  submitText: {
-    fontSize: Typography.fontSizeLg,
-    fontWeight: Typography.fontWeightBold,
-    color: Colors.textOnPrimary,
-  },
+  submitInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
+  submitText: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textOnPrimary },
 
-  disclaimer: {
-    marginTop: Spacing.lg,
-    fontSize: Typography.fontSizeXs,
-    color: Colors.textSecondary,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
+  disclaimer: { marginTop: Spacing.lg, fontSize: Typography.fontSizeXs, color: Colors.textSecondary, lineHeight: 18, textAlign: 'center' },
 
-  hiddenWeb: {
-    position: 'absolute',
-    width: 1,
-    height: 1,
-    bottom: 0,
-    right: 0,
-    opacity: 0,
-  },
+  hiddenWeb: { position: 'absolute', width: 1, height: 1, bottom: 0, right: 0, opacity: 0 },
 });

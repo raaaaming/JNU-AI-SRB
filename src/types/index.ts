@@ -41,18 +41,28 @@ export interface BookingFormData {
   facilitySeq: number;
   /** 예약 날짜 "YYYY-MM-DD" — reserveDt */
   reserveDt: string;
-  /** 시작 시간 "HH:MM" */
-  startTime: string;
-  /** 종료 시간 "HH:MM" */
-  endTime: string;
+  /**
+   * 선택한 예약 시간대 — reserveTimes 체크박스 값들.
+   * 각 항목은 "HH:MM~HH:MM" 형식 (예: "13:00~14:00").
+   */
+  times: string[];
   /** 사용 인원 수 — userCnt */
   memberCount: number;
   /** 예약자 전원(이름 + 학번) — userNm / userNo */
   members: BookingMember[];
   /** 연락처 — moblieNo (서버 철자 그대로) */
   contact: string;
-  /** 이용 목적 코드/값 — usePurps */
+  /** 이용 목적 값 — usePurps (option value 그대로 전송) */
   purpose: string;
+}
+
+/** Available time slots + purpose options extracted from a date's real form. */
+export interface DaySlotInfo {
+  reserveDt: string;
+  /** 예약 가능한 시간대 ("HH:MM~HH:MM") */
+  available: string[];
+  /** 이용목적 옵션 (label/value) */
+  purposes: { label: string; value: string }[];
 }
 
 /** Result of a reservation submission attempt. */
@@ -70,6 +80,8 @@ export type TabParamList = {
 /** WebView postMessage payloads sent from injected scripts */
 export type WebViewMessage =
   | { type: 'userInfo'; name: string; id: string }
-  | { type: 'bookingResult'; ok: boolean; message?: string; status?: number }
+  | { type: 'bookingResult'; ok: boolean; message?: string }
+  | { type: 'slotInfo'; reserveDt: string; available: string[]; purposes: { label: string; value: string }[] }
+  | { type: 'progress'; step: string }
   | { type: 'error'; message: string }
   | { type: 'ready' };

@@ -1,31 +1,24 @@
 /**
- * Booking form configuration.
- *
- * ⚠️ The values below are best-effort defaults inferred from the public
- * site and the myList.do query string. Confirm against the real booking
- * page and adjust here — this is the single place to update.
+ * Booking form configuration — confirmed against the real facility form
+ * (/facility/cvg/facilityCalendar.do).
  */
 
-import { FACILITY_SEQ } from './urls';
-
-/**
- * Selectable study rooms.
- * TODO: confirm the real room list + their facilitySeq values.
- * For now we expose the known AI-college facility.
- */
+/** Selectable facilities, by their facilitySeq. */
 export interface RoomOption {
   label: string;
   facilitySeq: number;
 }
 
 export const ROOMS: RoomOption[] = [
-  { label: 'AI융합대학 스터디룸', facilitySeq: FACILITY_SEQ },
+  { label: '스터디룸1 (학생)', facilitySeq: 344 },
+  { label: '스터디룸2 (학생)', facilitySeq: 345 },
+  { label: '회의실 (교직원)', facilitySeq: 339 },
 ];
 
 /**
  * 이용 목적 options.
- * TODO: replace with the exact <option> values from the booking form's
- * usePurps dropdown (label shown to user, value sent to server).
+ * `value` must match the server's <option value> EXACTLY (note: "스터디 "
+ * carries a trailing space on the live form). `label` is the trimmed display.
  */
 export interface PurposeOption {
   label: string;
@@ -33,24 +26,19 @@ export interface PurposeOption {
 }
 
 export const PURPOSE_OPTIONS: PurposeOption[] = [
-  { label: '스터디', value: '스터디' },
-  { label: '그룹 과제', value: '그룹과제' },
-  { label: '회의', value: '회의' },
-  { label: '세미나', value: '세미나' },
-  { label: '기타', value: '기타' },
+  { label: '동아리 및 소모임', value: '동아리 및 소모임' },
+  { label: '스터디', value: '스터디 ' },
 ];
 
 /**
- * Operating hours used to generate selectable time slots.
- * TODO: confirm open/close hours and slot granularity.
+ * Default selectable hourly slots, used until the live form reports the
+ * date's actual availability. Format matches `reserveTimes` checkbox values.
  */
 export const OPERATING = {
-  /** First selectable hour (24h) */
+  /** First slot start hour (24h) */
   openHour: 9,
-  /** Last selectable END hour (24h). e.g. 22 means last slot ends at 22:00 */
+  /** Last slot END hour (24h) */
   closeHour: 22,
-  /** Slot size in minutes */
-  slotMinutes: 60,
 } as const;
 
 /** Minimum / maximum people on a single reservation. */
@@ -60,19 +48,15 @@ export const MEMBER_LIMITS = {
 } as const;
 
 /**
- * Generates "HH:MM" time options between openHour and closeHour.
- * @param includeClose - if true, includes the closing time (for end-time pickers)
+ * Generates the full set of hourly slot labels "HH:MM~HH:MM"
+ * between openHour and closeHour, e.g. "09:00~10:00" … "21:00~22:00".
  */
-export function generateTimeSlots(includeClose = false): string[] {
+export function generateSlots(): string[] {
   const slots: string[] = [];
-  const step = OPERATING.slotMinutes;
-  const startMin = OPERATING.openHour * 60;
-  const endMin = OPERATING.closeHour * 60;
-
-  for (let m = startMin; includeClose ? m <= endMin : m < endMin; m += step) {
-    const h = Math.floor(m / 60);
-    const mm = m % 60;
-    slots.push(`${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`);
+  for (let h = OPERATING.openHour; h < OPERATING.closeHour; h++) {
+    const start = `${String(h).padStart(2, '0')}:00`;
+    const end = `${String(h + 1).padStart(2, '0')}:00`;
+    slots.push(`${start}~${end}`);
   }
   return slots;
 }
