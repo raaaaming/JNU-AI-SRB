@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/hooks/useAuth';
+import { useSessionBridge } from '@/contexts/SessionBridge';
 import {
   Colors,
   Typography,
@@ -44,6 +45,7 @@ function formatLoginTime(ts?: number): string {
  */
 export default function SettingsScreen() {
   const auth = useAuth();
+  const bridge = useSessionBridge();
   const router = useRouter();
 
   const handleLogout = useCallback(() => {
@@ -55,15 +57,22 @@ export default function SettingsScreen() {
         {
           text: '로그아웃',
           style: 'destructive',
-          onPress: () => {
-            auth.logout().then(() => {
-              router.replace('/login');
-            });
+          onPress: async () => {
+            // First end the SSO session inside the bridge WebView so the
+            // session cookie is expired server-side; otherwise the next login
+            // screen would silently auto-login on the still-valid cookie.
+            try {
+              await bridge.logout();
+            } catch {
+              // best-effort — clear local state regardless
+            }
+            await auth.logout();
+            router.replace('/login');
           },
         },
       ],
     );
-  }, [auth, router]);
+  }, [auth, bridge, router]);
 
   const handleEmailContact = useCallback(() => {
     Linking.openURL(`mailto:${CONTACT_EMAIL}`).catch(() => {

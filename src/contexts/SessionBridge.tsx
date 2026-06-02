@@ -11,6 +11,7 @@ import WebView, { type WebViewMessageEvent } from 'react-native-webview';
 
 import { URLS } from '../constants/urls';
 import { useAuth } from './AuthContext';
+import { logoutScript } from '../services/bookingService';
 
 /**
  * SessionBridge
@@ -48,6 +49,13 @@ export interface SessionBridgeValue {
   ): Promise<T>;
   /** Force a reload of the conduit page (e.g. after a session refresh). */
   reload(): void;
+  /**
+   * Logs the SSO session out inside the conduit page (clicks the site's logout
+   * control) so the session cookie is expired server-side. Resolves once the
+   * logout navigation has had time to complete; safe to call before clearing
+   * local auth state.
+   */
+  logout(): Promise<void>;
 }
 
 const SessionBridgeContext = createContext<SessionBridgeValue | undefined>(undefined);
@@ -153,7 +161,22 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
     webRef.current?.reload();
   }, []);
 
-  const value: SessionBridgeValue = { ready, run, reload };
+  const logout = useCallback(async (): Promise<void> => {
+    // Best-effort: trigger the page's logout, capped so a not-ready bridge or
+    // a stuck page never hangs the sign-out. We then give the resulting logout
+    // navigation a moment to reach the server before the caller tears us down.
+    try {
+      await Promise.race([
+        run<{ found: boolean }>((reqId) => logoutScript(reqId), { timeoutMs: 6000 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('logout timeout')), 7000)),
+      ]);
+    } catch {
+      // ignore — proceed to clear local state regardless
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+  }, [run]);
+
+  const value: SessionBridgeValue = { ready, run, reload, logout };
 
   return (
     <SessionBridgeContext.Provider value={value}>

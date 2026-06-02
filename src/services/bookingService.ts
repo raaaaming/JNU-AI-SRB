@@ -67,6 +67,53 @@ export function myReservationsScript(reqId: string, listUrl: string): string {
 `;
 }
 
+/**
+ * Logs the SSO session out from inside the authenticated bridge page.
+ *
+ * The site's logout control is an anchor with href="#none" whose real action
+ * is a JS handler, so we can't just navigate to a URL — we locate the control
+ * by its "로그아웃" text (or a logout href/onclick) and click it, which runs the
+ * page's own logout flow and expires the server-side session cookie.
+ *
+ * The result is reported BEFORE the click fires, because clicking navigates the
+ * page away and tears down this script's messaging channel.
+ *
+ * Resolves with: { found: boolean }
+ */
+export function logoutScript(reqId: string): string {
+  return `
+(function() {
+  var REQ = ${JSON.stringify(reqId)};
+  function post(o) { if (window.ReactNativeWebView) { o.__bridge = REQ; window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
+  try {
+    var nodes = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
+    var target = null;
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var txt = (el.textContent || el.value || '').replace(/\\s+/g, '');
+      var attr = (el.getAttribute('onclick') || '') + ' ' + (el.getAttribute('href') || '');
+      if (txt.indexOf('로그아웃') >= 0 || /logout|logoutProc|fnLogout/i.test(attr)) {
+        target = el; break;
+      }
+    }
+    post({ kind: 'result', ok: true, data: { found: !!target } });
+    if (target) {
+      setTimeout(function () {
+        try { target.click(); }
+        catch (e) {
+          var href = target.getAttribute('href') || '';
+          if (href && href.charAt(0) !== '#') { window.location.href = href; }
+        }
+      }, 60);
+    }
+  } catch (e) {
+    post({ kind: 'result', ok: false, error: '로그아웃 처리 중 오류: ' + (e && e.message ? e.message : '') });
+  }
+  true;
+})();
+`;
+}
+
 /** Per-day availability scraped from the calendar table. */
 export interface DayAvailability {
   day: number;
