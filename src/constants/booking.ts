@@ -48,6 +48,16 @@ export const MEMBER_LIMITS = {
 } as const;
 
 /**
+ * The JNU reservation system does NOT support online cancellation, so the app
+ * surfaces this contact instead. Numbers are the facility's administrative
+ * inquiry lines listed on the cvg facility page.
+ */
+export const CANCEL_INFO = {
+  message: '예약 취소·변경은 웹·앱에서 지원되지 않습니다. 아래 담당 부서로 문의해 주세요.',
+  phones: ['062-530-4203', '062-530-4204'],
+} as const;
+
+/**
  * Generates the full set of hourly slot labels "HH:MM~HH:MM"
  * between openHour and closeHour, e.g. "09:00~10:00" … "21:00~22:00".
  */

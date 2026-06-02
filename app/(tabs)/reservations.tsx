@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Linking,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -14,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useSessionBridge } from '@/contexts/SessionBridge';
 import { buildMyReservationsUrl } from '@/constants/urls';
+import { CANCEL_INFO } from '@/constants/booking';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '@/constants/theme';
 import { myReservationsScript } from '@/services/bookingService';
 import type { MyReservation } from '@/types';
@@ -43,6 +46,33 @@ function statusStyle(raw: string): { label: string; color: string; bg: string } 
   if (raw.includes('반려') || raw.includes('거절') || raw.includes('불가'))
     return { label: raw || '반려', color: Colors.error, bg: '#FDE8E8' };
   return { label: raw || '-', color: Colors.textSecondary, bg: Colors.surfaceVariant };
+}
+
+/** Notice that online cancellation isn't supported, with tap-to-call contacts. */
+function CancelInfoBanner() {
+  const call = () => {
+    const phones = CANCEL_INFO.phones;
+    Alert.alert('취소·변경 문의', '전화할 번호를 선택하세요.', [
+      ...phones.map((p) => ({
+        text: p,
+        onPress: () => Linking.openURL(`tel:${p.replace(/-/g, '')}`),
+      })),
+      { text: '닫기', style: 'cancel' as const },
+    ]);
+  };
+
+  return (
+    <TouchableOpacity style={styles.banner} onPress={call} activeOpacity={0.8}>
+      <Ionicons name="information-circle-outline" size={18} color={Colors.secondary} style={{ marginTop: 1 }} />
+      <View style={styles.bannerTextWrap}>
+        <Text style={styles.bannerText}>{CANCEL_INFO.message}</Text>
+        <View style={styles.bannerPhoneRow}>
+          <Ionicons name="call-outline" size={14} color={Colors.secondary} />
+          <Text style={styles.bannerPhone}>{CANCEL_INFO.phones.join(' / ')}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
 }
 
 function ReservationCard({ item }: { item: MyReservation }) {
@@ -159,6 +189,7 @@ export default function ReservationsScreen() {
           </View>
         ) : (
           <>
+            <CancelInfoBanner />
             {upcoming.length > 0 && (
               <>
                 <Text style={styles.sectionLabel}>예정된 예약 ({upcoming.length})</Text>
@@ -215,6 +246,19 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
     marginLeft: Spacing.xs,
   },
+
+  banner: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    backgroundColor: Colors.surfaceVariant,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+  },
+  bannerTextWrap: { flex: 1 },
+  bannerText: { fontSize: Typography.fontSizeSm, color: Colors.textSecondary, lineHeight: 19 },
+  bannerPhoneRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: Spacing.xs },
+  bannerPhone: { fontSize: Typography.fontSizeSm, color: Colors.secondary, fontWeight: Typography.fontWeightSemibold },
 
   card: { backgroundColor: Colors.surface, borderRadius: BorderRadius.lg, padding: Spacing.lg, marginBottom: Spacing.md },
   pastWrap: { opacity: 0.65 },
