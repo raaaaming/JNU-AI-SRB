@@ -218,6 +218,57 @@ export const AUTH_PROBE_SCRIPT = `
 `;
 
 /**
+ * Builds a script that fills the SSO "아이디" (ID/password) login tab with the
+ * given credentials and submits it, driving the real SSO page.
+ *
+ * Targets the confirmed markup of sso.jnu.ac.kr/Idp/Login.aspx:
+ *   - tab anchor:  a[href="#login-tab-4"]   (아이디 tab)
+ *   - id input:    #mfaUserIdOtp
+ *   - pw input:    #mfaUserPwdOtp
+ *   - submit btn:  #btnOtpAuthSubmit (type=button, JS handler → sends OTP)
+ *
+ * Values are dispatched with input/change events so any page listeners pick
+ * them up. After submit the page advances to the OTP / trusted-device step,
+ * which we surface in the WebView itself.
+ *
+ * Posts back: { type: 'credFilled', okId, okPw } or { type: 'credError', error }
+ */
+export function buildFillCredentialsScript(userId: string, password: string): string {
+  return `
+(function() {
+  function post(o) { if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
+  function setVal(el, val) {
+    if (!el) return false;
+    el.focus && el.focus();
+    el.value = val;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('keyup', { bubbles: true }));
+    return true;
+  }
+  try {
+    var tab = document.querySelector('a[href="#login-tab-4"]');
+    if (tab) { try { tab.click(); } catch (e) {} }
+    var doFill = function () {
+      var id = document.getElementById('mfaUserIdOtp');
+      var pw = document.getElementById('mfaUserPwdOtp');
+      var okId = setVal(id, ${JSON.stringify(userId)});
+      var okPw = setVal(pw, ${JSON.stringify(password)});
+      post({ type: 'credFilled', okId: okId, okPw: okPw });
+      var btn = document.getElementById('btnOtpAuthSubmit');
+      setTimeout(function () { if (btn) { try { btn.click(); } catch (e) {} } }, 200);
+    };
+    // The tab switch is a CSS animation; give it a beat before filling.
+    setTimeout(doFill, 250);
+  } catch (e) {
+    post({ type: 'credError', error: String(e) });
+  }
+  true;
+})();
+`;
+}
+
+/**
  * Builds a combined injection script that includes CLEANUP_SCRIPT
  * plus any additional custom CSS provided by the caller.
  *
