@@ -24,28 +24,41 @@ import WebView, {
 import { useAuth } from '@/hooks/useAuth';
 import { URLS } from '@/constants/urls';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '@/constants/theme';
-import { AUTH_PROBE_SCRIPT, buildFillCredentialsScript } from '@/utils/webviewScripts';
+import {
+  AUTH_PROBE_SCRIPT,
+  SSO_STEP_PROBE,
+  OTP_TIMER_SCRIPT,
+  OTP_REQUEST_SMS_SCRIPT,
+  OTP_CANCEL_SCRIPT,
+  buildFillCredentialsScript,
+  buildFillOtpScript,
+} from '@/utils/webviewScripts';
 
 const SAVED_ID_KEY = 'last_user_id';
+const OTP_LENGTH = 6;
 
 /**
  * Login screen — hybrid native + WebView.
  *
- * The actual SSO session lives in a hidden WebView (so its cookies stay
- * available to the SessionBridge). The first step — ID + password — is a
- * NATIVE form whose values are injected into the WebView's SSO "아이디" tab and
- * submitted. The second step (SMS/email/OTP code + "신뢰할 수 있는 기기등록")
- * is shown in the WebView itself, since it's dynamic and security-sensitive.
+ * The SSO session lives in a hidden WebView (so its cookies stay available to
+ * the SessionBridge), but both SSO steps are driven from NATIVE UI:
+ *   - credentials: native ID/pw form → injected into the SSO "아이디" tab
+ *   - otp:         native 6-digit code + "신뢰기기 등록" → injected into the
+ *                  #otpDigitGroup boxes (the page auto-verifies on completion)
  *
- * Flow / phases:
- *   init        — WebView loading cvg / redirecting to SSO (spinner)
- *   credentials — on the SSO login page: native ID/pw form is shown
- *   webview     — after submitting: the official OTP / trusted-device page
+ * The only part still shown in the WebView is the SMS/email delivery modal
+ * (its markup isn't mirrored natively yet).
+ *
+ * Phases:
+ *   init        — loading cvg / redirecting / verifying (spinner)
+ *   credentials — native ID/pw form
+ *   otp         — native 2-step code entry
+ *   webview     — official page shown directly (fallback)
  *
  * If a trusted-device cookie is still valid, cvg loads authenticated and the
- * probe finishes login immediately — the native form is never shown.
+ * probe finishes login immediately — no form is shown.
  */
-type Phase = 'init' | 'credentials' | 'webview';
+type Phase = 'init' | 'credentials' | 'otp' | 'webview';
 
 export default function LoginScreen() {
   const auth = useAuth();
@@ -53,32 +66,37 @@ export default function LoginScreen() {
   const webViewRef = useRef<WebView>(null);
 
   const [phase, setPhase] = useState<Phase>('init');
+
+  // Credentials step
   const [userIdInput, setUserIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [saveId, setSaveId] = useState(true);
 
+  // OTP step
+  const [otpCode, setOtpCode] = useState('');
+  const [otpTrust, setOtpTrust] = useState(true);
+  const [otpTimer, setOtpTimer] = useState('');
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  // Reveal the WebView so the user can use the official SMS/email delivery modal.
+  const [showDelivery, setShowDelivery] = useState(false);
+
   // Navigate into the app exactly once.
   const completedRef = useRef(false);
-  // The user has submitted the native credentials → reveal the WebView for OTP.
+  // The user has submitted the native credentials.
   const submittedRef = useRef(false);
   // Latest URL the WebView is on.
   const currentUrlRef = useRef<string>('');
   // Whether we've already probed during the CURRENT visit to cvg.
   const probedVisitRef = useRef(false);
 
-  /** True when a URL is on the cvg booking origin (scheme+host prefix). */
   const isBookingOrigin = (url: string) =>
     url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
-
-  /** True when a URL is on the SSO host. */
   const isSsoHost = (url: string) => url.includes('sso.jnu.ac.kr');
 
   // Prefill the saved ID, if any.
   useEffect(() => {
     AsyncStorage.getItem(SAVED_ID_KEY)
-      .then((id) => {
-        if (id) setUserIdInput(id);
-      })
+      .then((id) => id && setUserIdInput(id))
       .catch(() => {});
   }, []);
 
@@ -87,7 +105,6 @@ export default function LoginScreen() {
     (name?: string, id?: string) => {
       if (completedRef.current) return;
       completedRef.current = true;
-
       auth.login(name || undefined, id || undefined).then(() => {
         router.replace('/(tabs)/');
       });
@@ -95,12 +112,7 @@ export default function LoginScreen() {
     [auth, router],
   );
 
-  /**
-   * Probe the current cvg page for real auth — once per visit. Landing on cvg
-   * is NOT proof of login (the calendar is public), so AUTH_PROBE_SCRIPT reports
-   * whether we're authenticated (→ finish) and, if not, clicks the page's own
-   * login link to start the real SSO flow.
-   */
+  /** Probe a cvg page for real auth — once per visit (see AUTH_PROBE_SCRIPT). */
   const maybeProbe = useCallback(() => {
     if (completedRef.current) return;
     if (!isBookingOrigin(currentUrlRef.current)) return;
@@ -109,93 +121,155 @@ export default function LoginScreen() {
     webViewRef.current?.injectJavaScript(AUTH_PROBE_SCRIPT);
   }, []);
 
-  /** Called when the WebView navigates to a new URL. */
+  /** On an SSO page, ask which step is showing so the native UI can mirror it. */
+  const probeSsoStep = useCallback(() => {
+    if (completedRef.current) return;
+    webViewRef.current?.injectJavaScript(SSO_STEP_PROBE);
+  }, []);
+
   const handleNavigationStateChange = useCallback(
     (navState: WebViewNavigation) => {
       const url = navState.url ?? '';
       currentUrlRef.current = url;
 
       if (isBookingOrigin(url)) {
-        // On cvg: either heading to login (probe clicks 로그인) or returning
-        // post-auth (probe finishes). Show a spinner while that resolves.
         if (!completedRef.current) setPhase('init');
         if (!navState.loading) maybeProbe();
         return;
       }
 
-      // Off cvg → arm a fresh probe for when we come back (fixes the case where
-      // SSO returns to the same cvg URL we already probed).
+      // Off cvg → re-arm the cvg probe for our eventual return.
       probedVisitRef.current = false;
 
       if (isSsoHost(url)) {
-        // Credentials page before submit → native form; after submit → the
-        // official OTP / trusted-device page in the WebView.
-        setPhase(submittedRef.current ? 'webview' : 'credentials');
-      } else if (submittedRef.current) {
-        // Left the SSO host AFTER submitting → auth succeeded (the session
-        // cookie is now set, even if SSO routed us to the portal rather than
-        // cvg). The SessionBridge will use that cookie. Finish login.
-        if (!navState.loading) completeLogin();
-        else setPhase('webview');
+        // Ask the page which SSO step it's on (credentials vs otp).
+        if (!navState.loading) probeSsoStep();
+        else if (phase === 'init' && !submittedRef.current) {
+          // keep spinner until the probe resolves
+        }
+      } else if (submittedRef.current && !navState.loading) {
+        // Left the SSO host after submitting → auth succeeded (cookie is set
+        // even if SSO routed us to the portal). Finish login.
+        completeLogin();
       }
     },
-    [maybeProbe, completeLogin],
+    [maybeProbe, probeSsoStep, completeLogin, phase],
   );
 
-  /** Handles postMessages from injected JS (probe + credential fill). */
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
       try {
         const data = JSON.parse(event.nativeEvent.data);
 
-        if (data.type === 'authState') {
-          if (data.authed) {
-            completeLogin(data.name, data.id);
-          } else if (data.noControls) {
-            // The public cvg page had no usable login link — go straight to
-            // the SSO login URL that returns to cvg.
-            webViewRef.current?.injectJavaScript(
-              `window.location.href = ${JSON.stringify(URLS.SSO_LOGIN_RETURN)}; true;`,
-            );
-          }
-          return;
-        }
-        if (data.type === 'credError') {
-          submittedRef.current = false;
-          setPhase('credentials');
-          Alert.alert('로그인 오류', '아이디/비밀번호 입력란을 찾지 못했습니다. 다시 시도해주세요.');
+        switch (data.type) {
+          case 'authState':
+            if (data.authed) completeLogin(data.name, data.id);
+            else if (data.noControls) {
+              webViewRef.current?.injectJavaScript(
+                `window.location.href = ${JSON.stringify(URLS.SSO_LOGIN_RETURN)}; true;`,
+              );
+            }
+            break;
+
+          case 'ssoStep':
+            if (data.step === 'otp') {
+              setShowDelivery(false);
+              setOtpVerifying(false);
+              if (data.timer) setOtpTimer(data.timer);
+              setPhase('otp');
+            } else if (data.step === 'credentials') {
+              // Back on the credentials page. If we'd already submitted, the
+              // login was rejected — surface the error and let the user retry.
+              if (submittedRef.current) {
+                submittedRef.current = false;
+                Alert.alert('로그인 실패', data.error || '아이디 또는 비밀번호를 확인해주세요.');
+              }
+              setPhase('credentials');
+            } else if (submittedRef.current) {
+              setPhase('webview');
+            }
+            break;
+
+          case 'otpTimer':
+            if (data.value) setOtpTimer(data.value);
+            break;
+
+          case 'otpResult':
+            if (!data.ok) {
+              setOtpVerifying(false);
+              Alert.alert('인증 오류', data.error || '인증번호 확인에 실패했습니다.');
+            }
+            // On ok we keep the spinner; the page auto-verifies and redirects,
+            // which completeLogin() picks up via navigation.
+            break;
+
+          case 'credError':
+            submittedRef.current = false;
+            setPhase('credentials');
+            Alert.alert('로그인 오류', '아이디/비밀번호 입력란을 찾지 못했습니다. 다시 시도해주세요.');
+            break;
         }
       } catch {
-        // Malformed message — ignore
+        // ignore malformed messages
       }
     },
     [completeLogin],
   );
 
-  /** Inject the native credentials into the SSO form and submit. */
+  // While on the native OTP screen, keep the countdown fresh.
+  useEffect(() => {
+    if (phase !== 'otp' || showDelivery) return;
+    const id = setInterval(() => webViewRef.current?.injectJavaScript(OTP_TIMER_SCRIPT), 1000);
+    return () => clearInterval(id);
+  }, [phase, showDelivery]);
+
+  // ── Actions ──
   const submitCredentials = useCallback(() => {
     const id = userIdInput.trim();
     if (!id || !passwordInput) {
       Alert.alert('입력 확인', '아이디와 비밀번호를 모두 입력해주세요.');
       return;
     }
-
     if (saveId) AsyncStorage.setItem(SAVED_ID_KEY, id).catch(() => {});
     else AsyncStorage.removeItem(SAVED_ID_KEY).catch(() => {});
 
     submittedRef.current = true;
     webViewRef.current?.injectJavaScript(buildFillCredentialsScript(id, passwordInput));
-    // Don't keep the password around in memory.
     setPasswordInput('');
-    // Reveal the WebView for the OTP / trusted-device step.
-    setPhase('webview');
-  }, [userIdInput, passwordInput, saveId]);
+    setPhase('init'); // spinner until the OTP step is detected
+    // The credentials submit may be AJAX (no full load); poll for the next step.
+    setTimeout(probeSsoStep, 1200);
+    setTimeout(probeSsoStep, 2600);
+  }, [userIdInput, passwordInput, saveId, probeSsoStep]);
+
+  const requestSmsCode = useCallback(() => {
+    webViewRef.current?.injectJavaScript(OTP_REQUEST_SMS_SCRIPT);
+    // The delivery picker is a page modal we don't mirror yet — reveal it.
+    setShowDelivery(true);
+  }, []);
+
+  const submitOtp = useCallback(() => {
+    const code = otpCode.replace(/[^0-9]/g, '');
+    if (code.length < OTP_LENGTH) {
+      Alert.alert('입력 확인', `인증번호 ${OTP_LENGTH}자리를 입력해주세요.`);
+      return;
+    }
+    setOtpVerifying(true);
+    webViewRef.current?.injectJavaScript(buildFillOtpScript(code, otpTrust));
+  }, [otpCode, otpTrust]);
+
+  const cancelOtp = useCallback(() => {
+    submittedRef.current = false;
+    setOtpCode('');
+    setOtpVerifying(false);
+    setPhase('init');
+    webViewRef.current?.injectJavaScript(OTP_CANCEL_SCRIPT);
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar style="light" />
 
-      {/* ── Header / branding ── */}
       <View style={styles.header}>
         <View style={styles.logoBox}>
           <Text style={styles.logoText}>JNU</Text>
@@ -204,14 +278,9 @@ export default function LoginScreen() {
         <Text style={styles.subtitle}>JNU 포털 계정으로 로그인하세요</Text>
       </View>
 
-      {/* ── Body ── */}
       <View style={styles.body}>
-        {/* The SSO WebView is always mounted; it's covered by the native form
-            during the credentials phase and revealed for the OTP step. */}
         <WebView
           ref={webViewRef}
-          // Start at the protected booking page so cvg redirects to SSO WITH
-          // the correct return target (lands back on cvg, not the portal).
           source={{ uri: URLS.BOOKING_CALENDAR }}
           style={styles.webView}
           sharedCookiesEnabled
@@ -221,33 +290,35 @@ export default function LoginScreen() {
           startInLoadingState={false}
           onNavigationStateChange={handleNavigationStateChange}
           onMessage={handleMessage}
+          onLoadEnd={() => {
+            const url = currentUrlRef.current;
+            if (isBookingOrigin(url)) maybeProbe();
+            else if (isSsoHost(url)) probeSsoStep();
+          }}
           mixedContentMode={Platform.OS === 'android' ? 'compatibility' : undefined}
         />
 
-        {/* OTP-step helper banner (only while the official page is shown) */}
-        {phase === 'webview' && (
-          <View style={styles.otpBanner} pointerEvents="none">
-            <Ionicons name="shield-checkmark-outline" size={16} color={Colors.primary} />
-            <Text style={styles.otpBannerText}>
-              인증번호를 입력하고 <Text style={styles.otpBannerBold}>'신뢰할 수 있는 기기등록'</Text>을 체크하면
-              1개월간 자동 로그인됩니다.
-            </Text>
+        {/* Delivery-modal banner while the WebView is revealed for it */}
+        {phase === 'otp' && showDelivery && (
+          <View style={styles.deliveryBar}>
+            <TouchableOpacity onPress={() => setShowDelivery(false)} style={styles.deliveryBack}>
+              <Ionicons name="arrow-back" size={20} color={Colors.primary} />
+              <Text style={styles.deliveryBackText}>인증번호 입력으로</Text>
+            </TouchableOpacity>
+            <Text style={styles.deliveryHint}>발송 방법을 선택하세요</Text>
           </View>
         )}
 
-        {/* Native credentials form (covers the WebView) */}
+        {/* ── Native credentials form ── */}
         {phase === 'credentials' && (
           <KeyboardAvoidingView
-            style={styles.formOverlay}
+            style={styles.overlay}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           >
-            <ScrollView
-              contentContainerStyle={styles.formScroll}
-              keyboardShouldPersistTaps="handled"
-            >
+            <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled">
               <Text style={styles.formTitle}>아이디 로그인</Text>
               <Text style={styles.formHint}>
-                아이디·비밀번호로 로그인하면 다음 화면에서 문자/이메일/OTP 인증을 진행합니다.
+                아이디·비밀번호로 로그인하면 다음 단계에서 인증번호를 입력합니다.
               </Text>
 
               <View style={styles.inputRow}>
@@ -280,24 +351,16 @@ export default function LoginScreen() {
                 />
               </View>
 
-              <TouchableOpacity
-                style={styles.saveIdRow}
-                onPress={() => setSaveId((v) => !v)}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name={saveId ? 'checkbox' : 'square-outline'}
-                  size={20}
-                  color={saveId ? Colors.primary : Colors.textDisabled}
-                />
-                <Text style={styles.saveIdText}>아이디 저장</Text>
+              <TouchableOpacity style={styles.checkRow} onPress={() => setSaveId((v) => !v)} activeOpacity={0.7}>
+                <Ionicons name={saveId ? 'checkbox' : 'square-outline'} size={20} color={saveId ? Colors.primary : Colors.textDisabled} />
+                <Text style={styles.checkText}>아이디 저장</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.loginBtn} onPress={submitCredentials} activeOpacity={0.85}>
-                <Text style={styles.loginBtnText}>로그인</Text>
+              <TouchableOpacity style={styles.primaryBtn} onPress={submitCredentials} activeOpacity={0.85}>
+                <Text style={styles.primaryBtnText}>로그인</Text>
               </TouchableOpacity>
 
-              <Text style={styles.secureNote}>
+              <Text style={styles.note}>
                 <Ionicons name="information-circle-outline" size={13} color={Colors.textDisabled} /> 비밀번호는 학교
                 공식 SSO에만 전송되며 앱에 저장되지 않습니다.
               </Text>
@@ -305,11 +368,78 @@ export default function LoginScreen() {
           </KeyboardAvoidingView>
         )}
 
-        {/* Initial / transition spinner */}
+        {/* ── Native OTP form ── */}
+        {phase === 'otp' && !showDelivery && (
+          <KeyboardAvoidingView
+            style={styles.overlay}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled">
+              <Text style={styles.formTitle}>2단계 인증번호 입력</Text>
+              <Text style={styles.formHint}>
+                문자·이메일로 받은 인증번호 {OTP_LENGTH}자리를 입력하세요.
+              </Text>
+
+              {otpTimer ? (
+                <View style={styles.timerRow}>
+                  <Ionicons name="time-outline" size={16} color={Colors.warning} />
+                  <Text style={styles.timerText}>인증 유효시간 {otpTimer}</Text>
+                </View>
+              ) : null}
+
+              <TextInput
+                style={styles.otpInput}
+                placeholder="------"
+                placeholderTextColor={Colors.textDisabled}
+                value={otpCode}
+                onChangeText={(t) => setOtpCode(t.replace(/[^0-9]/g, '').slice(0, OTP_LENGTH))}
+                keyboardType="number-pad"
+                maxLength={OTP_LENGTH}
+                returnKeyType="go"
+                onSubmitEditing={submitOtp}
+                autoFocus
+              />
+
+              <TouchableOpacity style={styles.checkRow} onPress={() => setOtpTrust((v) => !v)} activeOpacity={0.7}>
+                <Ionicons name={otpTrust ? 'checkbox' : 'square-outline'} size={20} color={otpTrust ? Colors.primary : Colors.textDisabled} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkText}>신뢰할 수 있는 기기 등록</Text>
+                  <Text style={styles.checkSub}>체크하면 약 1개월간 추가 인증 없이 자동 로그인됩니다.</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, otpVerifying && styles.btnDisabled]}
+                onPress={submitOtp}
+                disabled={otpVerifying}
+                activeOpacity={0.85}
+              >
+                {otpVerifying ? (
+                  <ActivityIndicator color={Colors.textOnPrimary} />
+                ) : (
+                  <Text style={styles.primaryBtnText}>인증하기</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.secondaryBtn} onPress={requestSmsCode} activeOpacity={0.8}>
+                <Ionicons name="mail-outline" size={18} color={Colors.primary} />
+                <Text style={styles.secondaryBtnText}>문자·이메일로 인증번호 받기</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.cancelBtn} onPress={cancelOtp} activeOpacity={0.7}>
+                <Text style={styles.cancelText}>인증 취소</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        )}
+
+        {/* Spinner */}
         {phase === 'init' && (
-          <View style={styles.loadingOverlay}>
-            <ActivityIndicator size="large" color={Colors.primary} />
-            <Text style={styles.loadingText}>로그인 준비 중…</Text>
+          <View style={styles.overlay}>
+            <View style={styles.spinnerCenter}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={styles.spinnerText}>{submittedRef.current ? '인증 단계 준비 중…' : '로그인 준비 중…'}</Text>
+            </View>
           </View>
         )}
       </View>
@@ -320,7 +450,6 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.primary },
 
-  // ── Header ──
   header: {
     alignItems: 'center',
     paddingTop: Spacing.xl,
@@ -348,7 +477,6 @@ const styles = StyleSheet.create({
   },
   subtitle: { fontSize: Typography.fontSizeSm, color: 'rgba(255,255,255,0.75)', textAlign: 'center' },
 
-  // ── Body ──
   body: {
     flex: 1,
     backgroundColor: Colors.surface,
@@ -358,24 +486,25 @@ const styles = StyleSheet.create({
   },
   webView: { flex: 1 },
 
-  // ── OTP helper banner ──
-  otpBanner: {
+  // Delivery-modal bar
+  deliveryBar: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.xs,
+    justifyContent: 'space-between',
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     backgroundColor: '#EAF1FB',
   },
-  otpBannerText: { flex: 1, fontSize: Typography.fontSizeXs, color: Colors.textSecondary, lineHeight: 16 },
-  otpBannerBold: { fontWeight: Typography.fontWeightBold, color: Colors.primary },
+  deliveryBack: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  deliveryBackText: { fontSize: Typography.fontSizeSm, color: Colors.primary, fontWeight: Typography.fontWeightSemibold },
+  deliveryHint: { fontSize: Typography.fontSizeXs, color: Colors.textSecondary },
 
-  // ── Native credentials form ──
-  formOverlay: {
+  // Shared overlay (covers WebView)
+  overlay: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -390,12 +519,8 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginBottom: Spacing.xs,
   },
-  formHint: {
-    fontSize: Typography.fontSizeSm,
-    color: Colors.textSecondary,
-    lineHeight: 19,
-    marginBottom: Spacing.lg,
-  },
+  formHint: { fontSize: Typography.fontSizeSm, color: Colors.textSecondary, lineHeight: 19, marginBottom: Spacing.lg },
+
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -407,15 +532,29 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   inputIcon: { marginRight: Spacing.sm },
-  input: {
-    flex: 1,
+  input: { flex: 1, paddingVertical: Spacing.md, fontSize: Typography.fontSizeMd, color: Colors.textPrimary },
+
+  // OTP code field
+  otpInput: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
-    fontSize: Typography.fontSizeMd,
+    fontSize: 30,
+    fontWeight: Typography.fontWeightBold,
     color: Colors.textPrimary,
+    textAlign: 'center',
+    letterSpacing: 12,
+    marginBottom: Spacing.md,
   },
-  saveIdRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: Spacing.lg },
-  saveIdText: { fontSize: Typography.fontSizeSm, color: Colors.textSecondary },
-  loginBtn: {
+  timerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: Spacing.md },
+  timerText: { fontSize: Typography.fontSizeSm, color: Colors.warning, fontWeight: Typography.fontWeightSemibold },
+
+  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm, marginBottom: Spacing.lg },
+  checkText: { fontSize: Typography.fontSizeMd, color: Colors.textPrimary },
+  checkSub: { fontSize: Typography.fontSizeXs, color: Colors.textSecondary, marginTop: 2, lineHeight: 16 },
+
+  primaryBtn: {
     backgroundColor: Colors.primary,
     borderRadius: BorderRadius.lg,
     paddingVertical: Spacing.lg,
@@ -424,26 +563,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...Shadow.sm,
   },
-  loginBtnText: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textOnPrimary },
-  secureNote: {
-    marginTop: Spacing.lg,
-    fontSize: Typography.fontSizeXs,
-    color: Colors.textDisabled,
-    lineHeight: 17,
-    textAlign: 'center',
-  },
+  primaryBtnText: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textOnPrimary },
+  btnDisabled: { opacity: 0.6 },
 
-  // ── Loading overlay ──
-  loadingOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+  secondaryBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: Spacing.md,
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    marginTop: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.primary,
   },
-  loadingText: { marginTop: Spacing.sm, fontSize: Typography.fontSizeMd, color: Colors.textSecondary },
+  secondaryBtnText: { fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightSemibold, color: Colors.primary },
+
+  cancelBtn: { alignItems: 'center', paddingVertical: Spacing.md, marginTop: Spacing.sm },
+  cancelText: { fontSize: Typography.fontSizeSm, color: Colors.textSecondary },
+
+  note: { marginTop: Spacing.lg, fontSize: Typography.fontSizeXs, color: Colors.textDisabled, lineHeight: 17, textAlign: 'center' },
+
+  spinnerCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.md },
+  spinnerText: { fontSize: Typography.fontSizeMd, color: Colors.textSecondary },
 });

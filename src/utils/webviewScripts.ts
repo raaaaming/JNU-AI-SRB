@@ -276,6 +276,123 @@ export function buildFillCredentialsScript(userId: string, password: string): st
 }
 
 /**
+ * Runs on an sso.jnu.ac.kr page and reports which step is showing, so the
+ * native UI can mirror it:
+ *   - 'otp'         → #otpDigitGroup present (2-step code entry); includes timer
+ *   - 'credentials' → #mfaUserIdOtp / #userId present (id/pw form); includes any
+ *                     error text shown in #mfaOtpStatus
+ *   - 'other'       → neither found after retries
+ *
+ * Posts: { type: 'ssoStep', step, timer?, error? }
+ */
+export const SSO_STEP_PROBE = `
+(function() {
+  function post(o) { if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
+  var n = 0;
+  function txt(id) { var el = document.getElementById(id); return el ? (el.textContent || '').trim() : ''; }
+  function check() {
+    if (document.getElementById('otpDigitGroup')) {
+      post({ type: 'ssoStep', step: 'otp', timer: txt('otpPageTimer') });
+      return true;
+    }
+    if (document.getElementById('mfaUserIdOtp') || document.getElementById('userId')) {
+      post({ type: 'ssoStep', step: 'credentials', error: txt('mfaOtpStatus') || txt('mfaPwdlessStatus') });
+      return true;
+    }
+    return false;
+  }
+  (function loop() {
+    if (check()) return;
+    if (++n < 12) { setTimeout(loop, 300); return; }
+    post({ type: 'ssoStep', step: 'other' });
+  })();
+  true;
+})();
+`;
+
+/** Reads the OTP countdown timer and posts it: { type: 'otpTimer', value } */
+export const OTP_TIMER_SCRIPT = `
+(function() {
+  try {
+    var t = document.getElementById('otpPageTimer');
+    if (t && window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'otpTimer', value: (t.textContent || '').trim() }));
+    }
+  } catch (e) {}
+  true;
+})();
+`;
+
+/** Opens the official "문자 및 이메일로 받기" delivery modal in the page. */
+export const OTP_REQUEST_SMS_SCRIPT = `
+(function() {
+  try { var b = document.getElementById('btnOtpMethodSmsEmail'); if (b) b.click(); } catch (e) {}
+  true;
+})();
+`;
+
+/** Cancels 2-step auth by following the page's 인증취소 link. */
+export const OTP_CANCEL_SCRIPT = `
+(function() {
+  try {
+    var nodes = document.querySelectorAll('a');
+    for (var i = 0; i < nodes.length; i++) {
+      if ((nodes[i].textContent || '').indexOf('인증취소') >= 0 && nodes[i].href) {
+        window.location.href = nodes[i].href;
+        return;
+      }
+    }
+  } catch (e) {}
+  true;
+})();
+`;
+
+/**
+ * Fills the 6 OTP digit boxes (#otpDigitGroup input.otp-digit) with the given
+ * code and, if requested, ticks "신뢰할 수 있는 기기 등록" (#trustDevice) BEFORE
+ * filling — so the page's auto-verify (which fires once all digits are entered)
+ * registers the device. Dispatches input/keyup per box to drive that handler.
+ *
+ * Posts: { type: 'otpResult', ok, error? }
+ */
+export function buildFillOtpScript(code: string, trust: boolean): string {
+  return `
+(function() {
+  function post(o) { if (window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } }
+  try {
+    var group = document.getElementById('otpDigitGroup');
+    if (!group) { post({ type: 'otpResult', ok: false, error: '인증번호 입력란을 찾지 못했습니다.' }); return; }
+    var boxes = group.querySelectorAll('input.otp-digit');
+    var digits = ${JSON.stringify(code)}.replace(/[^0-9]/g, '').split('');
+    if (digits.length < boxes.length) {
+      post({ type: 'otpResult', ok: false, error: '인증번호 ' + boxes.length + '자리를 입력해주세요.' });
+      return;
+    }
+    ${trust ? `var tc = document.getElementById('trustDevice'); if (tc && !tc.checked) { try { tc.click(); } catch (e) { tc.checked = true; } }` : ``}
+    for (var i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
+      b.focus && b.focus();
+      b.value = digits[i] || '';
+      b.dispatchEvent(new Event('input', { bubbles: true }));
+      try { b.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: digits[i] || '' })); } catch (e) {}
+    }
+    var last = boxes[boxes.length - 1];
+    if (last) {
+      last.focus && last.focus();
+      last.dispatchEvent(new Event('input', { bubbles: true }));
+      try { last.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: digits[digits.length - 1] || '' })); } catch (e) {}
+      last.blur && last.blur();
+    }
+    post({ type: 'otpResult', ok: true });
+  } catch (e) {
+    post({ type: 'otpResult', ok: false, error: String(e) });
+  }
+  true;
+})();
+`;
+}
+
+/**
  * Builds a combined injection script that includes CLEANUP_SCRIPT
  * plus any additional custom CSS provided by the caller.
  *
