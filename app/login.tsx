@@ -132,10 +132,14 @@ export default function LoginScreen() {
         // official OTP / trusted-device page in the WebView.
         setPhase(submittedRef.current ? 'webview' : 'credentials');
       } else if (submittedRef.current) {
-        setPhase('webview');
+        // Left the SSO host AFTER submitting → auth succeeded (the session
+        // cookie is now set, even if SSO routed us to the portal rather than
+        // cvg). The SessionBridge will use that cookie. Finish login.
+        if (!navState.loading) completeLogin();
+        else setPhase('webview');
       }
     },
-    [maybeProbe],
+    [maybeProbe, completeLogin],
   );
 
   /** Handles postMessages from injected JS (probe + credential fill). */
@@ -145,7 +149,15 @@ export default function LoginScreen() {
         const data = JSON.parse(event.nativeEvent.data);
 
         if (data.type === 'authState') {
-          if (data.authed) completeLogin(data.name, data.id);
+          if (data.authed) {
+            completeLogin(data.name, data.id);
+          } else if (data.noControls) {
+            // The public cvg page had no usable login link — go straight to
+            // the SSO login URL that returns to cvg.
+            webViewRef.current?.injectJavaScript(
+              `window.location.href = ${JSON.stringify(URLS.SSO_LOGIN_RETURN)}; true;`,
+            );
+          }
           return;
         }
         if (data.type === 'credError') {

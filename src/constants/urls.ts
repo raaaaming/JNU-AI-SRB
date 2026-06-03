@@ -4,6 +4,15 @@
 
 export const URLS = {
   SSO_LOGIN: 'https://sso.jnu.ac.kr/Idp/Login.aspx',
+  /**
+   * SSO login page that returns to the cvg booking site after auth. The
+   * RelayState value is taken from the cvg SP-initiated login form, so the IdP
+   * redirects back to cvg on success. Used as a fallback when the public cvg
+   * page doesn't expose a clickable login link.
+   */
+  SSO_LOGIN_RETURN:
+    'https://sso.jnu.ac.kr/Idp/Login.aspx?RelayState=' +
+    encodeURIComponent('https://cvg.jnu.ac.kr/cvg/17459/subview.do'),
   BOOKING_CALENDAR:
     'https://cvg.jnu.ac.kr/cvg/17459/subview.do?enc=Zm5jdDF8QEB8JTJGZmFjaWxpdHklMkZjdmclMkZmYWNpbGl0eUNhbGVuZGFyLmRvJTNG',
   MY_RESERVATIONS_BASE: 'https://cvg.jnu.ac.kr/cvg/17459/subview.do',

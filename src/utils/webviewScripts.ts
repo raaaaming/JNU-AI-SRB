@@ -193,12 +193,17 @@ export const AUTH_PROBE_SCRIPT = `
         return;
       }
       if (loginEl) {
-        post({ type: 'authState', authed: false });
+        post({ type: 'authState', authed: false, foundLogin: true });
         setTimeout(function () {
-          try { loginEl.click(); }
-          catch (e) {
-            var h = loginEl.getAttribute && loginEl.getAttribute('href');
-            if (h && h.charAt(0) !== '#') { window.location.href = h; }
+          // Prefer navigating to the link's resolved URL (cvg login links are
+          // usually plain anchors to the SSO endpoint); fall back to a click
+          // for JS-driven handlers.
+          var abs = loginEl.href || '';
+          var raw = (loginEl.getAttribute && loginEl.getAttribute('href')) || '';
+          if (abs && raw.charAt(0) !== '#' && /^https?:/i.test(abs)) {
+            window.location.href = abs;
+          } else {
+            try { loginEl.click(); } catch (e) {}
           }
         }, 80);
         return;
@@ -206,6 +211,8 @@ export const AUTH_PROBE_SCRIPT = `
       // Header/controls may not be rendered yet — retry a few times before
       // giving up, so a slightly slow page doesn't stall login detection.
       if (attempts < 8) { setTimeout(probe, 400); return; }
+      // No login control found on the cvg page → let RN navigate straight to
+      // the SSO login URL as a fallback.
       post({ type: 'authState', authed: false, noControls: true });
     } catch (e) {
       if (attempts < 8) { setTimeout(probe, 400); return; }
