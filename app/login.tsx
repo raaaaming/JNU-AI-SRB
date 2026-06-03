@@ -126,6 +126,11 @@ export default function LoginScreen() {
         // first (belt-and-suspenders on top of bridge.logout()), then we'll
         // redirect to the login form once the logout page finishes loading.
         setStartUrl(forceLogin ? URLS.SSO_LOGOUT : URLS.BOOKING_CALENDAR);
+        // Show the native credentials form straight away — the ID field is
+        // already pre-filled from SAVED_ID_KEY above.  The WebView continues
+        // the SSO_LOGOUT → SSO_LOGIN_RETURN navigation in the background so it
+        // is ready to receive the injected credentials when the user submits.
+        if (forceLogin) setPhase('credentials');
       }
     })();
     return () => {
@@ -166,7 +171,9 @@ export default function LoginScreen() {
       currentUrlRef.current = url;
 
       if (isBookingOrigin(url)) {
-        if (!completedRef.current) setPhase('init');
+        // Don't cover the credentials form with a spinner when the SSO logout
+        // flow briefly passes through or redirects to cvg.
+        if (!completedRef.current && !forceLoginRef.current) setPhase('init');
         if (!navState.loading) maybeProbe();
         return;
       }
