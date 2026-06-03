@@ -40,6 +40,13 @@ export type ProgressHandler = (step: string) => void;
 export interface BridgeRunOptions {
   timeoutMs?: number;
   onProgress?: ProgressHandler;
+  /**
+   * For operations whose success is a page navigation (e.g. a reservation
+   * submit POSTs and navigates away, tearing down the injected script before
+   * it can report back). When set, a full navigation while the op is pending
+   * resolves it with this factory's value instead of timing out.
+   */
+  resolveOnNavigation?: () => unknown;
 }
 
 export interface SessionBridgeValue {
@@ -68,6 +75,8 @@ interface Pending {
   reject: (err: Error) => void;
   onProgress?: ProgressHandler;
   timer: ReturnType<typeof setTimeout>;
+  /** If set, a full navigation resolves the op with this value (see options). */
+  onNavigate?: () => unknown;
 }
 
 let reqCounter = 0;
@@ -110,6 +119,19 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
     // hold operations until it settles so we never inject into a half-loaded page.
     readyRef.current = false;
     setReady(false);
+    // A navigation is the success signal for ops that opted into it (the
+    // submit's form POST navigated away). Resolve them now rather than waiting
+    // for a result message that the torn-down script can never send.
+    pendingRef.current.forEach((p, id) => {
+      if (!p.onNavigate) return;
+      clearTimeout(p.timer);
+      pendingRef.current.delete(id);
+      try {
+        p.resolve(p.onNavigate());
+      } catch {
+        p.resolve(undefined);
+      }
+    });
   }, []);
 
   /** Resolves when the conduit page is loaded; rejects if it stays unready. */
@@ -194,6 +216,7 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
             reject,
             onProgress: options?.onProgress,
             timer,
+            onNavigate: options?.resolveOnNavigation,
           });
 
           const script = buildScript(reqId);

@@ -191,7 +191,16 @@ export default function BookingScreen() {
             bridge
               .run<{ success: boolean; message: string }>(
                 (reqId) => submitScript(reqId, data),
-                { timeoutMs: 30000, onProgress: setProgressStep },
+                {
+                  timeoutMs: 30000,
+                  onProgress: setProgressStep,
+                  // jf_regist POSTs and navigates the conduit away before it can
+                  // message back. Treat that navigation as a successful submit.
+                  resolveOnNavigation: () => ({
+                    success: true,
+                    message: "예약 신청이 접수되었습니다. '내 예약'에서 확인해주세요.",
+                  }),
+                },
               )
               .then((res) => {
                 if (res.success) {
