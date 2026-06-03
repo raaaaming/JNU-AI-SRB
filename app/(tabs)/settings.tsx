@@ -110,6 +110,9 @@ export default function SettingsScreen() {
                 <Text style={styles.userName}>
                   {auth.userName ?? '(이름 없음)'}
                 </Text>
+                {auth.userDept ? (
+                  <Text style={styles.userId}>{auth.userDept}</Text>
+                ) : null}
                 {auth.userId ? (
                   <Text style={styles.userId}>학번: {auth.userId}</Text>
                 ) : null}

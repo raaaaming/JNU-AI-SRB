@@ -30,10 +30,13 @@ export interface AuthContextValue {
   isLoggedIn: boolean;
   userName?: string;
   userId?: string;
+  userDept?: string;
   loginTime?: number;
   isLoading: boolean;
   login: (userName?: string, userId?: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Merge portal profile data (name / student-ID / dept) into auth state. */
+  setProfile: (name: string, userId: string, dept: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -107,6 +110,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /** Merge portal profile data received after login. */
+  const setProfile = useCallback(async (name: string, userId: string, dept: string) => {
+    setAuthState((prev) => {
+      const updated: AuthState = {
+        ...prev,
+        userName: name || prev.userName,
+        userId: userId || prev.userId,
+        userDept: dept || prev.userDept,
+      };
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  }, []);
+
   /** Call to log the user out and clear stored credentials */
   const logout = useCallback(async () => {
     setAuthState(DEFAULT_STATE);
@@ -121,10 +138,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoggedIn: authState.isLoggedIn,
     userName: authState.userName,
     userId: authState.userId,
+    userDept: authState.userDept,
     loginTime: authState.loginTime,
     isLoading,
     login,
     logout,
+    setProfile,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -7,6 +7,7 @@ export interface AuthState {
   isLoggedIn: boolean;
   userName?: string;
   userId?: string;
+  userDept?: string;
   /** Unix timestamp (ms) of when the session was created */
   loginTime?: number;
 }

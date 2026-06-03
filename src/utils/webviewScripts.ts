@@ -393,6 +393,47 @@ export function buildFillOtpScript(code: string, trust: boolean): string {
 }
 
 /**
+ * Scrapes the logged-in user's name, student ID, and department from
+ * portal.jnu.ac.kr/Pages/Default.aspx.
+ *
+ * Targets the confirmed markup structure:
+ *   <span class="g-color-portal ...">인공지능학부</span>
+ *   <h5 ...>최윤서(263535)</h5>
+ *
+ * Retries up to 10 × 500 ms in case the page renders the card via JS.
+ * Posts: { type: 'portalProfile', name, id, dept }
+ */
+export const PORTAL_PROFILE_SCRIPT = `
+(function() {
+  function post(o) { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(o)); }
+  var n = 0;
+  function probe() {
+    try {
+      var deptEl = document.querySelector('span.g-color-portal');
+      var dept = deptEl ? deptEl.textContent.trim() : '';
+      var name = '', studentId = '';
+      var h5s = document.querySelectorAll('h5');
+      for (var i = 0; i < h5s.length; i++) {
+        var m = h5s[i].textContent.trim().match(/^([^(]+)\\((\\d+)\\)/);
+        if (m) { name = m[1].trim(); studentId = m[2].trim(); break; }
+      }
+      if (name || studentId || dept) {
+        post({ type: 'portalProfile', name: name, id: studentId, dept: dept });
+        return;
+      }
+      if (++n < 10) { setTimeout(probe, 500); return; }
+      post({ type: 'portalProfile', name: '', id: '', dept: '' });
+    } catch (e) {
+      if (++n < 10) { setTimeout(probe, 500); return; }
+      post({ type: 'portalProfile', name: '', id: '', dept: '', error: String(e) });
+    }
+  }
+  probe();
+  true;
+})();
+`;
+
+/**
  * Builds a combined injection script that includes CLEANUP_SCRIPT
  * plus any additional custom CSS provided by the caller.
  *
