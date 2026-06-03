@@ -93,6 +93,10 @@ export default function LoginScreen() {
   const currentUrlRef = useRef<string>('');
   // Whether we've already probed during the CURRENT visit to cvg.
   const probedVisitRef = useRef(false);
+  // True after logout: blocks auto-login until the user manually submits credentials.
+  const forceLoginRef = useRef(false);
+  // True once we've redirected away from the SSO logout page to the login form.
+  const logoutSentRef = useRef(false);
 
   const isBookingOrigin = (url: string) =>
     url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
@@ -116,7 +120,13 @@ export default function LoginScreen() {
       } catch {
         // ignore — fall back to the default start URL
       }
-      if (!cancelled) setStartUrl(forceLogin ? URLS.SSO_LOGIN_RETURN : URLS.BOOKING_CALENDAR);
+      if (!cancelled) {
+        forceLoginRef.current = forceLogin;
+        // When forcing re-login, visit the IdP logout endpoint in THIS WebView
+        // first (belt-and-suspenders on top of bridge.logout()), then we'll
+        // redirect to the login form once the logout page finishes loading.
+        setStartUrl(forceLogin ? URLS.SSO_LOGOUT : URLS.BOOKING_CALENDAR);
+      }
     })();
     return () => {
       cancelled = true;
@@ -165,10 +175,17 @@ export default function LoginScreen() {
       probedVisitRef.current = false;
 
       if (isSsoHost(url)) {
-        // Ask the page which SSO step it's on (credentials vs otp).
-        if (!navState.loading) probeSsoStep();
-        else if (phase === 'init' && !submittedRef.current) {
-          // keep spinner until the probe resolves
+        if (!navState.loading) {
+          if (forceLoginRef.current && !logoutSentRef.current) {
+            // Logout page (or its redirect) finished loading — now navigate to
+            // the actual login form so the user must re-authenticate.
+            logoutSentRef.current = true;
+            webViewRef.current?.injectJavaScript(
+              `window.location.href = ${JSON.stringify(URLS.SSO_LOGIN_RETURN)}; true;`,
+            );
+          } else {
+            probeSsoStep();
+          }
         }
       } else if (submittedRef.current && !navState.loading) {
         // Left the SSO host after submitting → auth succeeded (cookie is set
@@ -186,8 +203,17 @@ export default function LoginScreen() {
 
         switch (data.type) {
           case 'authState':
-            if (data.authed) completeLogin(data.name, data.id);
-            else if (data.noControls) {
+            if (data.authed) {
+              if (forceLoginRef.current) {
+                // SSO session still alive despite logout attempt — try again.
+                logoutSentRef.current = false;
+                webViewRef.current?.injectJavaScript(
+                  `window.location.href = ${JSON.stringify(URLS.SSO_LOGOUT)}; true;`,
+                );
+              } else {
+                completeLogin(data.name, data.id);
+              }
+            } else if (data.noControls) {
               webViewRef.current?.injectJavaScript(
                 `window.location.href = ${JSON.stringify(URLS.SSO_LOGIN_RETURN)}; true;`,
               );
@@ -257,6 +283,7 @@ export default function LoginScreen() {
     else AsyncStorage.removeItem(SAVED_ID_KEY).catch(() => {});
 
     submittedRef.current = true;
+    forceLoginRef.current = false;
     webViewRef.current?.injectJavaScript(buildFillCredentialsScript(id, passwordInput));
     setPasswordInput('');
     setPhase('init'); // spinner until the OTP step is detected
