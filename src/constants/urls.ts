@@ -2,6 +2,13 @@
  * URL constants and builder functions for JNU AI Study Room Booking
  */
 
+/**
+ * AsyncStorage flag set on explicit logout. The login screen reads it to start
+ * at the SSO login page (forcing a fresh sign-in) instead of the cvg calendar
+ * (which could silently auto-log-in on a lingering session).
+ */
+export const FORCE_LOGIN_KEY = 'force_login';
+
 export const URLS = {
   SSO_LOGIN: 'https://sso.jnu.ac.kr/Idp/Login.aspx',
   /**
@@ -13,6 +20,12 @@ export const URLS = {
   SSO_LOGIN_RETURN:
     'https://sso.jnu.ac.kr/Idp/Login.aspx?RelayState=' +
     encodeURIComponent('https://cvg.jnu.ac.kr/cvg/17459/subview.do'),
+  /**
+   * Authoritative SSO (IdP) logout endpoint — the `LogoutUrl` the SP form
+   * carries. Clicking the cvg page's local logout only ends the cvg session;
+   * navigating here ends the IdP session so the next visit isn't auto-logged in.
+   */
+  SSO_LOGOUT: 'https://sso.jnu.ac.kr/Idp/Dispatcher/ServiceLogout.aspx',
   BOOKING_CALENDAR:
     'https://cvg.jnu.ac.kr/cvg/17459/subview.do?enc=Zm5jdDF8QEB8JTJGZmFjaWxpdHklMkZjdmclMkZmYWNpbGl0eUNhbGVuZGFyLmRvJTNG',
   MY_RESERVATIONS_BASE: 'https://cvg.jnu.ac.kr/cvg/17459/subview.do',

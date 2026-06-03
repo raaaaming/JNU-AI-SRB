@@ -144,7 +144,6 @@ export default function ReservationsScreen() {
 
   const load = useCallback(
     async (isRefresh = false) => {
-      if (!bridge.ready) return;
       isRefresh ? setRefreshing(true) : setLoading(true);
       setError(null);
       try {

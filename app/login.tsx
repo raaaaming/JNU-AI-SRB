@@ -22,7 +22,7 @@ import WebView, {
 } from 'react-native-webview';
 
 import { useAuth } from '@/hooks/useAuth';
-import { URLS } from '@/constants/urls';
+import { URLS, FORCE_LOGIN_KEY } from '@/constants/urls';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '@/constants/theme';
 import {
   AUTH_PROBE_SCRIPT,
@@ -80,6 +80,11 @@ export default function LoginScreen() {
   // Reveal the WebView so the user can use the official SMS/email delivery modal.
   const [showDelivery, setShowDelivery] = useState(false);
 
+  // The WebView's start URL is resolved after reading the force-login flag:
+  // a fresh launch starts at cvg (enables trusted-device auto-login), but right
+  // after a logout we go straight to the SSO login page to force a sign-in.
+  const [startUrl, setStartUrl] = useState<string | null>(null);
+
   // Navigate into the app exactly once.
   const completedRef = useRef(false);
   // The user has submitted the native credentials.
@@ -93,11 +98,29 @@ export default function LoginScreen() {
     url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
   const isSsoHost = (url: string) => url.includes('sso.jnu.ac.kr');
 
-  // Prefill the saved ID, if any.
+  // Resolve the saved ID and the start URL (force-login → SSO login page).
   useEffect(() => {
-    AsyncStorage.getItem(SAVED_ID_KEY)
-      .then((id) => id && setUserIdInput(id))
-      .catch(() => {});
+    let cancelled = false;
+    (async () => {
+      let forceLogin = false;
+      try {
+        const [savedId, flag] = await Promise.all([
+          AsyncStorage.getItem(SAVED_ID_KEY),
+          AsyncStorage.getItem(FORCE_LOGIN_KEY),
+        ]);
+        if (savedId && !cancelled) setUserIdInput(savedId);
+        if (flag) {
+          forceLogin = true;
+          await AsyncStorage.removeItem(FORCE_LOGIN_KEY).catch(() => {});
+        }
+      } catch {
+        // ignore — fall back to the default start URL
+      }
+      if (!cancelled) setStartUrl(forceLogin ? URLS.SSO_LOGIN_RETURN : URLS.BOOKING_CALENDAR);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /** Finalize login exactly once: persist auth, then enter the app. */
@@ -279,9 +302,10 @@ export default function LoginScreen() {
       </View>
 
       <View style={styles.body}>
+        {startUrl && (
         <WebView
           ref={webViewRef}
-          source={{ uri: URLS.BOOKING_CALENDAR }}
+          source={{ uri: startUrl }}
           style={styles.webView}
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
@@ -297,6 +321,7 @@ export default function LoginScreen() {
           }}
           mixedContentMode={Platform.OS === 'android' ? 'compatibility' : undefined}
         />
+        )}
 
         {/* Delivery-modal banner while the WebView is revealed for it */}
         {phase === 'otp' && showDelivery && (

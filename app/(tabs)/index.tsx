@@ -50,7 +50,6 @@ export default function CalendarScreen() {
 
   // Fetch availability whenever the bridge is ready or facility/month changes.
   const loadAvailability = useCallback(async () => {
-    if (!bridge.ready) return;
     setLoading(true);
     setError(null);
     try {

@@ -13,8 +13,11 @@ import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { useAuth } from '@/hooks/useAuth';
 import { useSessionBridge } from '@/contexts/SessionBridge';
+import { FORCE_LOGIN_KEY } from '@/constants/urls';
 import {
   Colors,
   Typography,
@@ -58,9 +61,10 @@ export default function SettingsScreen() {
           text: '로그아웃',
           style: 'destructive',
           onPress: async () => {
-            // First end the SSO session inside the bridge WebView so the
-            // session cookie is expired server-side; otherwise the next login
-            // screen would silently auto-login on the still-valid cookie.
+            // Mark that the next login screen must force a fresh sign-in.
+            await AsyncStorage.setItem(FORCE_LOGIN_KEY, '1').catch(() => {});
+            // End the IdP session inside the bridge WebView so the next visit
+            // isn't silently auto-logged-in on a still-valid SSO session.
             try {
               await bridge.logout();
             } catch {

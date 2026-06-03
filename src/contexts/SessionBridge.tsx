@@ -14,7 +14,6 @@ import WebView, {
 
 import { URLS } from '../constants/urls';
 import { useAuth } from './AuthContext';
-import { logoutScript } from '../services/bookingService';
 
 /**
  * SessionBridge
@@ -243,19 +242,21 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async (): Promise<void> => {
-    // Best-effort: trigger the page's logout, capped so a not-ready bridge or
-    // a stuck page never hangs the sign-out. We then give the resulting logout
-    // navigation a moment to reach the server before the caller tears us down.
+    // End the IdP session at its authoritative logout endpoint (not just the
+    // cvg page's local logout link, which leaves the SSO session alive and
+    // causes the next visit to auto-log-in). Wait for it to process before the
+    // caller tears the conduit down.
+    readyRef.current = false;
+    setReady(false);
     try {
-      await Promise.race([
-        run<{ found: boolean }>((reqId) => logoutScript(reqId), { timeoutMs: 6000 }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('logout timeout')), 7000)),
-      ]);
+      webRef.current?.injectJavaScript(
+        `window.location.href = ${JSON.stringify(URLS.SSO_LOGOUT)}; true;`,
+      );
     } catch {
       // ignore — proceed to clear local state regardless
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-  }, [run]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 2500));
+  }, []);
 
   const value: SessionBridgeValue = { ready, run, reload, logout };
 
