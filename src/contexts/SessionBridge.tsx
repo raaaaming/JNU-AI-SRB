@@ -7,7 +7,10 @@ import {
   type ReactNode,
 } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
-import WebView, { type WebViewMessageEvent } from 'react-native-webview';
+import WebView, {
+  type WebViewMessageEvent,
+  type WebViewNavigation,
+} from 'react-native-webview';
 
 import { URLS } from '../constants/urls';
 import { useAuth } from './AuthContext';
@@ -73,10 +76,19 @@ function nextReqId(): string {
   return `r${Date.now().toString(36)}_${reqCounter}`;
 }
 
+/** True when a URL is the booking-calendar conduit page (vs. a drifted page). */
+function isCalendarUrl(url: string): boolean {
+  return url.indexOf('/cvg/17459/subview.do') !== -1;
+}
+
 export function SessionBridgeProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const webRef = useRef<WebView>(null);
   const [ready, setReady] = useState(false);
+  // Mirror of `ready` for synchronous reads inside async tasks (no stale closure).
+  const readyRef = useRef(false);
+  // Latest URL the conduit WebView is on (to detect drift off the calendar).
+  const currentUrlRef = useRef<string>('');
 
   // Pending requests by id
   const pendingRef = useRef<Map<string, Pending>>(new Map());
@@ -86,18 +98,52 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
   const readyWaitersRef = useRef<Array<() => void>>([]);
 
   const handleLoadEnd = useCallback(() => {
+    readyRef.current = true;
     setReady(true);
     const waiters = readyWaitersRef.current;
     readyWaitersRef.current = [];
     waiters.forEach((w) => w());
   }, []);
 
-  const waitForReady = useCallback(() => {
-    return new Promise<void>((resolve) => {
-      if (webRef.current && ready) resolve();
-      else readyWaitersRef.current.push(resolve);
+  const handleLoadStart = useCallback(() => {
+    // A full navigation (e.g. after submitting a reservation) is in flight —
+    // hold operations until it settles so we never inject into a half-loaded page.
+    readyRef.current = false;
+    setReady(false);
+  }, []);
+
+  /** Resolves when the conduit page is loaded; rejects if it stays unready. */
+  const waitForReady = useCallback((timeoutMs = 12000) => {
+    return new Promise<void>((resolve, reject) => {
+      if (webRef.current && readyRef.current) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      const waiter = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        readyWaitersRef.current = readyWaitersRef.current.filter((w) => w !== waiter);
+        reject(new Error('세션 연결이 지연되고 있습니다. 잠시 후 다시 시도해주세요.'));
+      }, timeoutMs);
+      readyWaitersRef.current.push(waiter);
     });
-  }, [ready]);
+  }, []);
+
+  /** Force the conduit back to the calendar page (e.g. after a submit nav). */
+  const resetToCalendar = useCallback(() => {
+    readyRef.current = false;
+    setReady(false);
+    webRef.current?.injectJavaScript(
+      `window.location.replace(${JSON.stringify(URLS.BOOKING_CALENDAR)}); true;`,
+    );
+  }, []);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     let msg: any;
@@ -127,6 +173,13 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
     <T,>(buildScript: (reqId: string) => string, options?: BridgeRunOptions): Promise<T> => {
       const task = async (): Promise<T> => {
         await waitForReady();
+        // If the page drifted off the calendar (a reservation submit navigates
+        // away), restore it before injecting — otherwise the calendar/scrape
+        // functions are missing and every op would silently time out.
+        if (currentUrlRef.current && !isCalendarUrl(currentUrlRef.current)) {
+          resetToCalendar();
+          await waitForReady();
+        }
         const reqId = nextReqId();
         const timeoutMs = options?.timeoutMs ?? 25000;
 
@@ -153,12 +206,17 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
       queueRef.current = queued.catch(() => undefined);
       return queued as Promise<T>;
     },
-    [waitForReady],
+    [waitForReady, resetToCalendar],
   );
 
   const reload = useCallback(() => {
+    readyRef.current = false;
     setReady(false);
     webRef.current?.reload();
+  }, []);
+
+  const handleNavigationStateChange = useCallback((navState: WebViewNavigation) => {
+    currentUrlRef.current = navState.url ?? '';
   }, []);
 
   const logout = useCallback(async (): Promise<void> => {
@@ -191,7 +249,9 @@ export function SessionBridgeProvider({ children }: { children: ReactNode }) {
             thirdPartyCookiesEnabled
             javaScriptEnabled
             domStorageEnabled
+            onLoadStart={handleLoadStart}
             onLoadEnd={handleLoadEnd}
+            onNavigationStateChange={handleNavigationStateChange}
             onMessage={handleMessage}
             mixedContentMode={Platform.OS === 'android' ? 'compatibility' : undefined}
           />

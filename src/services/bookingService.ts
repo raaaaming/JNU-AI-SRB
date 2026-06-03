@@ -415,10 +415,13 @@ export function submitScript(reqId: string, data: BookingFormData): string {
           finish(false, '제출 중 오류: ' + (e && e.message ? e.message : 'unknown'));
           return;
         }
-        // If no dialog fires (page navigated), report an honest optimistic result.
+        // jf_regist POSTs and navigates the page away, which tears down this
+        // script before a later timer could fire — so report the optimistic
+        // result quickly (and before navigation) to free the bridge queue.
+        // A real validation alert, if any, calls finish() first (it wins).
         setTimeout(function () {
           finish(true, '신청 요청을 보냈습니다. \\'내 예약\\'에서 확인해주세요.');
-        }, 4000);
+        }, 1000);
       },
       function () { finish(false, '예약자 입력란을 준비하지 못했습니다.'); },
       40
