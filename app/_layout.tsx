@@ -1,4 +1,5 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
+import { View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -10,24 +11,38 @@ import { PORTAL_PROFILE_SCRIPT } from '@/utils/webviewScripts';
 /**
  * One-shot hidden WebView that loads portal.jnu.ac.kr and extracts the user's
  * name, student ID, and department.  Shares the SSO cookie store with the
- * bridge WebView so it auto-authenticates.  Unmounts once userDept is set.
+ * bridge WebView so it auto-authenticates.
+ *
+ * onDone is called whether the load succeeded or failed so the caller can
+ * unmount this component and stop retrying for the session.
  */
-function PortalProfileLoader() {
+function PortalProfileLoader({ onDone }: { onDone: () => void }) {
   const auth = useAuth();
   const webRef = useRef<WebView>(null);
+  const doneRef = useRef(false);
+
+  const finish = useCallback(() => {
+    if (!doneRef.current) {
+      doneRef.current = true;
+      onDone();
+    }
+  }, [onDone]);
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
       try {
         const data = JSON.parse(event.nativeEvent.data);
-        if (data.type === 'portalProfile' && (data.name || data.id || data.dept)) {
-          auth.setProfile(data.name ?? '', data.id ?? '', data.dept ?? '');
+        if (data.type === 'portalProfile') {
+          if (data.name || data.id || data.dept) {
+            auth.setProfile(data.name ?? '', data.id ?? '', data.dept ?? '');
+          }
+          finish();
         }
       } catch {
         // ignore malformed messages
       }
     },
-    [auth],
+    [auth, finish],
   );
 
   return (
@@ -41,6 +56,9 @@ function PortalProfileLoader() {
       domStorageEnabled
       onLoadEnd={() => webRef.current?.injectJavaScript(PORTAL_PROFILE_SCRIPT)}
       onMessage={handleMessage}
+      onError={finish}
+      onHttpError={finish}
+      renderError={() => <View />}
     />
   );
 }
@@ -57,6 +75,11 @@ function RootNavigator() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  // Tracks whether we have already attempted the portal profile fetch this
+  // session (success or failure). Resets on every app launch; persisted
+  // userDept from AsyncStorage means we won't mount the loader at all on
+  // subsequent opens after a successful fetch.
+  const [profileAttempted, setProfileAttempted] = useState(false);
 
   useEffect(() => {
     // Wait until the persisted auth state has been read
@@ -77,6 +100,8 @@ function RootNavigator() {
   // Render nothing while loading to avoid a flash of the wrong screen
   if (auth.isLoading) return null;
 
+  const showProfileLoader = auth.isLoggedIn && !auth.userDept && !profileAttempted;
+
   return (
     <>
       <Stack screenOptions={{ headerShown: false }}>
@@ -85,7 +110,9 @@ function RootNavigator() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="booking" options={{ presentation: 'modal' }} />
       </Stack>
-      {auth.isLoggedIn && !auth.userDept && <PortalProfileLoader />}
+      {showProfileLoader && (
+        <PortalProfileLoader onDone={() => setProfileAttempted(true)} />
+      )}
     </>
   );
 }
