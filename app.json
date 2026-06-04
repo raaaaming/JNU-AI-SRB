@@ -22,7 +22,8 @@
         "backgroundColor": "#003087"
       },
       "package": "com.jnu.ai.srb",
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
       "favicon": "./assets/favicon.png",

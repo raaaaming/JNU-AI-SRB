@@ -34,7 +34,7 @@ function PortalProfileLoader() {
     <WebView
       ref={webRef}
       source={{ uri: 'https://portal.jnu.ac.kr/Pages/Default.aspx' }}
-      style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+      style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
       sharedCookiesEnabled
       thirdPartyCookiesEnabled
       javaScriptEnabled
