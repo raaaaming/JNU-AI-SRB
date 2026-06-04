@@ -4,12 +4,18 @@ dist/
 dist-test/
 npm-debug.*
 *.jks
+*.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
 *.orig.*
 web-build/
+
+# Android release signing (contains passwords — never commit)
+android/keystore.properties
+# Android SDK path — auto-generated per machine
+android/local.properties
 
 # macOS
 .DS_Store
