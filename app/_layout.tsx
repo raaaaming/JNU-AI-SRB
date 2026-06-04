@@ -58,6 +58,7 @@ function PortalProfileLoader({ onDone }: { onDone: () => void }) {
       onMessage={handleMessage}
       onError={finish}
       onHttpError={finish}
+      onSslError={finish}
       renderError={() => <View />}
     />
   );
