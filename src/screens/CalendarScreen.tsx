@@ -6,11 +6,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import { useSessionBridge } from '@/contexts/SessionBridge';
 import { ROOMS } from '@/constants/booking';
@@ -24,14 +24,13 @@ function pad(n: number) {
   return String(n).padStart(2, '0');
 }
 
-/** Today as {year, month, day} in local time. */
 function today() {
   const d = new Date();
   return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
 }
 
 export default function CalendarScreen() {
-  const router = useRouter();
+  const navigation = useNavigation<any>();
   const bridge = useSessionBridge();
 
   const [facilitySeq, setFacilitySeq] = useState<number>(ROOMS[0].facilitySeq);
@@ -48,7 +47,6 @@ export default function CalendarScreen() {
   const goPrev = useCallback(() => setMonthIndex((i) => i - 1), []);
   const goNext = useCallback(() => setMonthIndex((i) => i + 1), []);
 
-  // Fetch availability whenever the bridge is ready or facility/month changes.
   const loadAvailability = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -72,7 +70,6 @@ export default function CalendarScreen() {
     loadAvailability();
   }, [loadAvailability]);
 
-  // Build the calendar grid (leading blanks + day numbers).
   const cells = useMemo(() => {
     const firstDow = new Date(year, month - 1, 1).getDay();
     const daysInMonth = new Date(year, month, 0).getDate();
@@ -96,16 +93,15 @@ export default function CalendarScreen() {
   const onDayPress = useCallback(
     (day: number) => {
       const reserveDt = `${year}-${pad(month)}-${pad(day)}`;
-      router.push({ pathname: '/booking', params: { reserveDt, facilitySeq: String(facilitySeq) } });
+      navigation.navigate('Booking', { reserveDt, facilitySeq: String(facilitySeq) });
     },
-    [router, year, month, facilitySeq],
+    [navigation, year, month, facilitySeq],
   );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.primary} />
 
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>스터디룸 예약</Text>
         <TouchableOpacity onPress={loadAvailability} style={styles.refreshBtn} accessibilityLabel="새로고침">
@@ -114,7 +110,6 @@ export default function CalendarScreen() {
       </View>
 
       <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
-        {/* Room selector */}
         <View style={styles.roomRow}>
           <Text style={styles.roomLabel}>스터디룸</Text>
           <View style={styles.roomSelect}>
@@ -126,7 +121,6 @@ export default function CalendarScreen() {
           </View>
         </View>
 
-        {/* Month navigation */}
         <View style={styles.monthBar}>
           <TouchableOpacity onPress={goPrev} style={styles.arrowBtn} accessibilityLabel="이전 달">
             <Ionicons name="chevron-back" size={22} color={Colors.primary} />
@@ -137,7 +131,6 @@ export default function CalendarScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Weekday header */}
         <View style={styles.weekHeader}>
           {WEEKDAYS.map((w, i) => (
             <Text
@@ -153,7 +146,6 @@ export default function CalendarScreen() {
           ))}
         </View>
 
-        {/* Calendar grid */}
         <View style={styles.grid}>
           {cells.map((day, idx) => {
             if (day === null) {
@@ -195,7 +187,6 @@ export default function CalendarScreen() {
           })}
         </View>
 
-        {/* Loading / error overlays */}
         {loading ? (
           <View style={styles.statusRow}>
             <ActivityIndicator color={Colors.primary} />
@@ -211,7 +202,6 @@ export default function CalendarScreen() {
           </View>
         ) : null}
 
-        {/* Legend */}
         <View style={styles.legend}>
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: Colors.success }]} />

@@ -7,12 +7,10 @@ import {
   ScrollView,
   Alert,
   Linking,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useAuth } from '@/hooks/useAuth';
@@ -29,7 +27,6 @@ import {
 const APP_VERSION = '1.0.0';
 const CONTACT_EMAIL = 'help@ai.jnu.ac.kr';
 
-/** Formats a Unix timestamp (ms) as a Korean date-time string. */
 function formatLoginTime(ts?: number): string {
   if (!ts) return '알 수 없음';
   return new Date(ts).toLocaleString('ko-KR', {
@@ -44,12 +41,12 @@ function formatLoginTime(ts?: number): string {
 /**
  * 설정 (Settings) tab — fully native, no WebView.
  *
- * Shows user info, app metadata, and a logout button.
+ * After logout, RootNavigator automatically switches to LoginScreen
+ * because auth.isLoggedIn becomes false.
  */
 export default function SettingsScreen() {
   const auth = useAuth();
   const bridge = useSessionBridge();
-  const router = useRouter();
 
   const handleLogout = useCallback(() => {
     Alert.alert(
@@ -61,22 +58,19 @@ export default function SettingsScreen() {
           text: '로그아웃',
           style: 'destructive',
           onPress: async () => {
-            // Mark that the next login screen must force a fresh sign-in.
             await AsyncStorage.setItem(FORCE_LOGIN_KEY, '1').catch(() => {});
-            // End the IdP session inside the bridge WebView so the next visit
-            // isn't silently auto-logged-in on a still-valid SSO session.
             try {
               await bridge.logout();
             } catch {
               // best-effort — clear local state regardless
             }
             await auth.logout();
-            router.replace('/login');
+            // RootNavigator switches to Login automatically when isLoggedIn → false
           },
         },
       ],
     );
-  }, [auth, bridge, router]);
+  }, [auth, bridge]);
 
   const handleEmailContact = useCallback(() => {
     Linking.openURL(`mailto:${CONTACT_EMAIL}`).catch(() => {
@@ -86,9 +80,8 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.primary} />
 
-      {/* ── Header ── */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>설정</Text>
       </View>
@@ -98,7 +91,6 @@ export default function SettingsScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── User info card ── */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>계정 정보</Text>
           <View style={[styles.card, Shadow.sm]}>
@@ -129,7 +121,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── App info section ── */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>앱 정보</Text>
           <View style={[styles.card, Shadow.sm]}>
@@ -141,7 +132,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── Contact / About ── */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>문의</Text>
           <View style={[styles.card, Shadow.sm]}>
@@ -163,13 +153,11 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── About blurb ── */}
         <Text style={styles.aboutText}>
           전남대학교 AI융합대학 스터디룸 예약 앱 v{APP_VERSION}{'\n'}
           JNU AI College Study Room Booking
         </Text>
 
-        {/* ── Logout button ── */}
         <TouchableOpacity
           style={styles.logoutButton}
           onPress={handleLogout}
@@ -184,10 +172,8 @@ export default function SettingsScreen() {
   );
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
-
 interface InfoRowProps {
-  icon: React.ComponentProps<typeof Ionicons>['name'];
+  icon: string;
   label: string;
   value: string;
 }
@@ -195,22 +181,16 @@ interface InfoRowProps {
 function InfoRow({ icon, label, value }: InfoRowProps) {
   return (
     <View style={styles.infoRow}>
-      <Ionicons name={icon} size={20} color={Colors.secondary} style={styles.rowIcon} />
+      <Ionicons name={icon as any} size={20} color={Colors.secondary} style={styles.rowIcon} />
       <Text style={styles.rowLabel}>{label}</Text>
       <Text style={styles.rowValue} numberOfLines={1}>{value}</Text>
     </View>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.primary,
-  },
+  container: { flex: 1, backgroundColor: Colors.primary },
 
-  // ── Header ──
   header: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
@@ -222,7 +202,6 @@ const styles = StyleSheet.create({
     color: Colors.textOnPrimary,
   },
 
-  // ── Scroll ──
   scroll: {
     flex: 1,
     backgroundColor: Colors.background,
@@ -235,10 +214,7 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
 
-  // ── Section ──
-  section: {
-    marginBottom: Spacing.md,
-  },
+  section: { marginBottom: Spacing.md },
   sectionLabel: {
     fontSize: Typography.fontSizeSm,
     fontWeight: Typography.fontWeightSemibold,
@@ -249,14 +225,12 @@ const styles = StyleSheet.create({
     marginLeft: Spacing.xs,
   },
 
-  // ── Card ──
   card: {
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.lg,
     overflow: 'hidden',
   },
 
-  // ── User header row ──
   userIconRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -271,9 +245,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  userTextBlock: {
-    flex: 1,
-  },
+  userTextBlock: { flex: 1 },
   userName: {
     fontSize: Typography.fontSizeLg,
     fontWeight: Typography.fontWeightSemibold,
@@ -285,7 +257,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // ── Info row ──
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -293,9 +264,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     gap: Spacing.sm,
   },
-  rowIcon: {
-    width: 24,
-  },
+  rowIcon: { width: 24 },
   rowLabel: {
     flex: 1,
     fontSize: Typography.fontSizeMd,
@@ -308,7 +277,6 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
-  // ── Contact row ──
   contactRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -321,14 +289,12 @@ const styles = StyleSheet.create({
     color: Colors.secondary,
   },
 
-  // ── Divider ──
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: Colors.borderLight,
-    marginLeft: Spacing.lg + 24 + Spacing.sm, // align to text start
+    marginLeft: Spacing.lg + 24 + Spacing.sm,
   },
 
-  // ── About text ──
   aboutText: {
     fontSize: Typography.fontSizeXs,
     color: Colors.textDisabled,
@@ -337,7 +303,6 @@ const styles = StyleSheet.create({
     marginVertical: Spacing.md,
   },
 
-  // ── Logout button ──
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',

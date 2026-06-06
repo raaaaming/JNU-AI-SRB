@@ -9,10 +9,10 @@ import {
   RefreshControl,
   Linking,
   Alert,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import { useSessionBridge } from '@/contexts/SessionBridge';
 import { buildMyReservationsUrl } from '@/constants/urls';
@@ -23,7 +23,6 @@ import type { MyReservation } from '@/types';
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-/** "2026-06-02" → "6월 2일 (월)" */
 function formatDate(iso: string): string {
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return iso;
@@ -32,23 +31,16 @@ function formatDate(iso: string): string {
   return `${Number(mo)}월 ${Number(d)}일 (${WEEKDAYS[dow]})`;
 }
 
-/** Today's date as "YYYY-MM-DD" (local). */
 function todayISO(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Current time as minutes since midnight (local). */
 function nowMinutes(): number {
   const d = new Date();
   return d.getHours() * 60 + d.getMinutes();
 }
 
-/**
- * End time (minutes since midnight) parsed from a "HH:MM~HH:MM" slot.
- * Uses the LAST HH:MM in the string (the slot's end). Returns null if it
- * can't be parsed, so callers can fall back safely.
- */
 function slotEndMinutes(time: string): number | null {
   const matches = [...time.matchAll(/(\d{1,2}):(\d{2})/g)];
   if (matches.length === 0) return null;
@@ -56,11 +48,6 @@ function slotEndMinutes(time: string): number | null {
   return Number(last[1]) * 60 + Number(last[2]);
 }
 
-/**
- * A reservation is "past" if its date is before today, or it's today and the
- * slot's end time has already passed. Future dates (and unparseable times on
- * today) count as upcoming.
- */
 function isPastReservation(r: MyReservation, today: string, curMin: number): boolean {
   if (r.date < today) return true;
   if (r.date > today) return false;
@@ -68,7 +55,6 @@ function isPastReservation(r: MyReservation, today: string, curMin: number): boo
   return end !== null ? end <= curMin : false;
 }
 
-/** Maps the raw status text to a display label + color. */
 function statusStyle(raw: string): { label: string; color: string; bg: string } {
   if (raw.includes('승인') || raw.includes('완료')) return { label: '승인', color: Colors.success, bg: '#E6F4EA' };
   if (raw.includes('대기')) return { label: '대기', color: Colors.warning, bg: '#FFF6E0' };
@@ -78,7 +64,6 @@ function statusStyle(raw: string): { label: string; color: string; bg: string } 
   return { label: raw || '-', color: Colors.textSecondary, bg: Colors.surfaceVariant };
 }
 
-/** Notice that online cancellation isn't supported, with tap-to-call contacts. */
 function CancelInfoBanner() {
   const call = () => {
     const phones = CANCEL_INFO.phones;
@@ -168,7 +153,6 @@ export default function ReservationsScreen() {
     load();
   }, [load]);
 
-  // Split into upcoming vs past by reservation date AND time-of-day.
   const { upcoming, past } = useMemo(() => {
     const today = todayISO();
     const curMin = nowMinutes();
@@ -177,7 +161,6 @@ export default function ReservationsScreen() {
     for (const r of reservations) {
       (isPastReservation(r, today, curMin) ? pa : up).push(r);
     }
-    // Upcoming: soonest first. Past: most recent first.
     up.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
     pa.sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
     return { upcoming: up, past: pa };
@@ -185,7 +168,7 @@ export default function ReservationsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.primary} />
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>내 예약 현황</Text>

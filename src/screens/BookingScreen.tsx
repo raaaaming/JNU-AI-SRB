@@ -9,11 +9,11 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import { useAuth } from '@/hooks/useAuth';
 import { useSessionBridge } from '@/contexts/SessionBridge';
@@ -23,12 +23,10 @@ import { submitScript, probeDayScript } from '@/services/bookingService';
 import type { BookingFormData, BookingMember } from '@/types';
 import { Field, TextField, Stepper, SelectField, type SelectItem } from '@/components/forms';
 
-/** Formats a Date as "YYYY-MM-DD". */
 function toISODate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Builds the next `count` selectable dates starting today. */
 function upcomingDates(count: number): SelectItem[] {
   const out: SelectItem[] = [];
   const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
@@ -45,7 +43,6 @@ function upcomingDates(count: number): SelectItem[] {
   return out;
 }
 
-/** Friendly label for each navigation/submit progress step. */
 const STEP_LABEL: Record<string, string> = {
   facility: '스터디룸 확인 중…',
   month: '날짜로 이동 중…',
@@ -56,15 +53,15 @@ const STEP_LABEL: Record<string, string> = {
 
 export default function BookingScreen() {
   const auth = useAuth();
-  const router = useRouter();
-  const params = useLocalSearchParams<{ reserveDt?: string; facilitySeq?: string }>();
+  const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+  const params = (route.params ?? {}) as { reserveDt?: string; facilitySeq?: string };
 
   const bridge = useSessionBridge();
   const [submitting, setSubmitting] = useState(false);
   const [probing, setProbing] = useState(false);
   const [progressStep, setProgressStep] = useState<string>('');
 
-  // ── Form state ──
   const dateOptions = useMemo(() => upcomingDates(14), []);
   const allSlots = useMemo(() => generateSlots(), []);
 
@@ -81,10 +78,8 @@ export default function BookingScreen() {
   const [purpose, setPurpose] = useState<string>(PURPOSE_OPTIONS[0].value);
   const [purposeOptions, setPurposeOptions] = useState<SelectItem[]>(PURPOSE_OPTIONS);
 
-  // Real availability reported by the live form (null = not yet probed).
   const [availableSlots, setAvailableSlots] = useState<string[] | null>(null);
 
-  // Keep the members array length in sync with memberCount
   useEffect(() => {
     setMembers((prev) => {
       if (memberCount === prev.length) return prev;
@@ -99,7 +94,6 @@ export default function BookingScreen() {
     setMembers((prev) => prev.map((m, i) => (i === index ? { ...m, ...patch } : m)));
   }, []);
 
-  // Probe the live form for real availability whenever room/date changes.
   useEffect(() => {
     if (!bridge.ready || submitting) return;
     let cancelled = false;
@@ -119,11 +113,11 @@ export default function BookingScreen() {
         setSelectedTimes((prev) => prev.filter((s) => available.includes(s)));
         if (Array.isArray(data.purposes) && data.purposes.length > 0) {
           setPurposeOptions(data.purposes);
-          setPurpose((p) => (data.purposes.some((o) => o.value === p) ? p : data.purposes[0].value));
+          setPurpose((p) => (data.purposes.some((o: SelectItem) => o.value === p) ? p : data.purposes[0].value));
         }
       })
       .catch(() => {
-        if (!cancelled) setAvailableSlots([]); // treat as "none available"
+        if (!cancelled) setAvailableSlots([]);
       })
       .finally(() => {
         if (!cancelled) {
@@ -143,7 +137,6 @@ export default function BookingScreen() {
     );
   }, []);
 
-  // ── Validation ──
   const validate = useCallback((): string | null => {
     if (!reserveDt) return '예약 날짜를 선택해주세요.';
     if (selectedTimes.length === 0) return '예약 시간을 1개 이상 선택해주세요.';
@@ -156,7 +149,6 @@ export default function BookingScreen() {
     return null;
   }, [reserveDt, selectedTimes, members, contact, purpose]);
 
-  // ── Submit ──
   const handleSubmit = useCallback(() => {
     const error = validate();
     if (error) {
@@ -194,8 +186,6 @@ export default function BookingScreen() {
                 {
                   timeoutMs: 30000,
                   onProgress: setProgressStep,
-                  // jf_regist POSTs and navigates the conduit away before it can
-                  // message back. Treat that navigation as a successful submit.
                   resolveOnNavigation: () => ({
                     success: true,
                     message: "예약 신청이 접수되었습니다. '내 예약'에서 확인해주세요.",
@@ -205,7 +195,7 @@ export default function BookingScreen() {
               .then((res) => {
                 if (res.success) {
                   Alert.alert('신청 완료', res.message ?? '예약이 접수되었습니다.', [
-                    { text: '확인', onPress: () => router.back() },
+                    { text: '확인', onPress: () => navigation.goBack() },
                   ]);
                 } else {
                   Alert.alert('신청 실패', res.message ?? '예약에 실패했습니다.');
@@ -222,19 +212,17 @@ export default function BookingScreen() {
         },
       ],
     );
-  }, [validate, bridge, facilitySeq, reserveDt, selectedTimes, memberCount, members, contact, purpose, router]);
+  }, [validate, bridge, facilitySeq, reserveDt, selectedTimes, memberCount, members, contact, purpose, navigation]);
 
-  // Which slots to show: real availability if known, else the full set.
   const slotsToShow = availableSlots ?? allSlots;
   const noSlots = availableSlots !== null && availableSlots.length === 0;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.primary} />
 
-      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} accessibilityLabel="닫기" style={styles.headerBtn}>
+        <TouchableOpacity onPress={() => navigation.goBack()} accessibilityLabel="닫기" style={styles.headerBtn}>
           <Ionicons name="close" size={26} color={Colors.textOnPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>스터디룸 예약 신청</Text>
@@ -243,7 +231,6 @@ export default function BookingScreen() {
 
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          {/* Room */}
           <Field label="스터디룸" required>
             <SelectField
               value={String(facilitySeq)}
@@ -252,12 +239,10 @@ export default function BookingScreen() {
             />
           </Field>
 
-          {/* Date */}
           <Field label="예약 날짜" required>
             <SelectField value={reserveDt} items={dateOptions} onSelect={setReserveDt} />
           </Field>
 
-          {/* Time slots */}
           <Field
             label="예약 시간"
             required
@@ -295,12 +280,10 @@ export default function BookingScreen() {
             )}
           </Field>
 
-          {/* Member count */}
           <Field label="사용 인원" required hint={`최소 ${MEMBER_LIMITS.min}명 ~ 최대 ${MEMBER_LIMITS.max}명`}>
             <Stepper value={memberCount} min={MEMBER_LIMITS.min} max={MEMBER_LIMITS.max} onChange={setMemberCount} />
           </Field>
 
-          {/* Members */}
           <Field label="예약자 정보" required hint="예약자 전원의 이름과 학번을 입력하세요.">
             {members.map((m, i) => (
               <View key={i} style={styles.memberRow}>
@@ -319,17 +302,14 @@ export default function BookingScreen() {
             ))}
           </Field>
 
-          {/* Contact */}
           <Field label="연락처" required>
             <TextField placeholder="010-0000-0000" value={contact} onChangeText={setContact} keyboardType="phone-pad" />
           </Field>
 
-          {/* Purpose */}
           <Field label="이용 목적" required>
             <SelectField value={purpose} items={purposeOptions} onSelect={setPurpose} />
           </Field>
 
-          {/* Submit */}
           <TouchableOpacity
             style={[styles.submitBtn, (submitting || noSlots) && styles.submitBtnDisabled]}
             onPress={handleSubmit}
@@ -376,7 +356,6 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: Colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   scrollContent: { padding: Spacing.lg, paddingBottom: Spacing.xxxl },
 
-  // Time slots
   slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   slotChip: {
     paddingHorizontal: Spacing.md,
@@ -394,7 +373,6 @@ const styles = StyleSheet.create({
   slotEmpty: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
   slotEmptyText: { fontSize: Typography.fontSizeSm, color: Colors.error },
 
-  // Members
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.sm },
   memberIndex: {
     width: 24,
@@ -407,7 +385,6 @@ const styles = StyleSheet.create({
   memberName: { flex: 1.2 },
   memberNo: { flex: 1 },
 
-  // Submit
   submitBtn: {
     backgroundColor: Colors.primary,
     borderRadius: BorderRadius.lg,

@@ -1,25 +1,26 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
-import { Stack, useRouter, useSegments } from 'expo-router';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import WebView, { type WebViewMessageEvent } from 'react-native-webview';
-import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { SessionBridgeProvider } from '@/contexts/SessionBridge';
+
+import { useAuth } from '@/hooks/useAuth';
 import { PORTAL_PROFILE_SCRIPT } from '@/utils/webviewScripts';
+import LoginScreen from '@/screens/LoginScreen';
+import TabNavigator from '@/navigation/TabNavigator';
+import BookingScreen from '@/screens/BookingScreen';
+
+const Stack = createNativeStackNavigator();
 
 /**
  * One-shot hidden WebView that loads portal.jnu.ac.kr and extracts the user's
- * name, student ID, and department.  Shares the SSO cookie store with the
+ * name, student ID, and department. Shares the SSO cookie store with the
  * bridge WebView so it auto-authenticates.
  *
  * portal.jnu.ac.kr uses a Korean CA (NIPA/CrossCert) not included in the
- * Android default trust store.  Since this URL is hardcoded to the university's
+ * Android default trust store. Since this URL is hardcoded to the university's
  * own portal inside a closed university app, bypassing the SSL error via
  * handler.proceed() is intentional and safe for this loader only.
- *
- * onDone is called on success or failure so the caller can unmount the loader
- * and stop retrying for the rest of the session.
  */
 function PortalProfileLoader({ onDone }: { onDone: () => void }) {
   const auth = useAuth();
@@ -63,7 +64,9 @@ function PortalProfileLoader({ onDone }: { onDone: () => void }) {
       onMessage={handleMessage}
       onError={finish}
       onHttpError={finish}
-      onSslError={(event) => {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-expect-error onSslError is an Android-only prop not yet in the TS types
+      onSslError={(event: any) => {
         // portal.jnu.ac.kr uses a Korean CA not trusted by Android's default
         // store. The URL is hardcoded to the university's own portal so
         // proceeding past the SSL check is intentional for this loader only.
@@ -74,65 +77,41 @@ function PortalProfileLoader({ onDone }: { onDone: () => void }) {
   );
 }
 
-/**
- * Inner component that owns the auth-based routing guard.
- * Lives below <AuthProvider> so it shares the single auth state instance.
- *
- * - While auth state is loading from AsyncStorage, renders nothing.
- * - Unauthenticated users are redirected to /login.
- * - Authenticated users see the main (tabs) layout.
- */
-function RootNavigator() {
+function AppNavigator() {
   const auth = useAuth();
-  const router = useRouter();
-  const segments = useSegments();
   const [profileAttempted, setProfileAttempted] = useState(false);
-
-  useEffect(() => {
-    // Wait until the persisted auth state has been read
-    if (auth.isLoading) return;
-
-    const onLoginPage = segments[0] === 'login';
-
-    if (!auth.isLoggedIn && !onLoginPage) {
-      router.replace('/login');
-    } else if (auth.isLoggedIn && onLoginPage) {
-      router.replace('/(tabs)/');
-    }
-  }, [auth.isLoggedIn, auth.isLoading, segments, router]);
 
   if (auth.isLoading) return null;
 
   const showProfileLoader = auth.isLoggedIn && !auth.userDept && !profileAttempted;
 
   return (
-    <>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="login" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="booking" options={{ presentation: 'modal' }} />
-      </Stack>
+    <View style={{ flex: 1 }}>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {auth.isLoggedIn ? (
+          <>
+            <Stack.Screen name="MainTabs" component={TabNavigator} />
+            <Stack.Screen
+              name="Booking"
+              component={BookingScreen}
+              options={{ presentation: 'modal' }}
+            />
+          </>
+        ) : (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        )}
+      </Stack.Navigator>
       {showProfileLoader && (
         <PortalProfileLoader onDone={() => setProfileAttempted(true)} />
       )}
-    </>
+    </View>
   );
 }
 
-/**
- * Root layout — provides shared context to the whole app.
- */
-export default function RootLayout() {
+export default function RootNavigator() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <AuthProvider>
-          <SessionBridgeProvider>
-            <RootNavigator />
-          </SessionBridgeProvider>
-        </AuthProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <NavigationContainer>
+      <AppNavigator />
+    </NavigationContainer>
   );
 }

@@ -10,11 +10,10 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Alert,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView, {
   type WebViewNavigation,
@@ -46,63 +45,45 @@ const OTP_LENGTH = 6;
  *   - otp:         native 6-digit code + "신뢰기기 등록" → injected into the
  *                  #otpDigitGroup boxes (the page auto-verifies on completion)
  *
- * The only part still shown in the WebView is the SMS/email delivery modal
- * (its markup isn't mirrored natively yet).
- *
  * Phases:
  *   init        — loading cvg / redirecting / verifying (spinner)
  *   credentials — native ID/pw form
  *   otp         — native 2-step code entry
  *   webview     — official page shown directly (fallback)
  *
- * If a trusted-device cookie is still valid, cvg loads authenticated and the
- * probe finishes login immediately — no form is shown.
+ * After auth.login() is called, RootNavigator automatically switches to MainTabs.
  */
 type Phase = 'init' | 'credentials' | 'otp' | 'webview';
 
 export default function LoginScreen() {
   const auth = useAuth();
-  const router = useRouter();
   const webViewRef = useRef<WebView>(null);
 
   const [phase, setPhase] = useState<Phase>('init');
 
-  // Credentials step
   const [userIdInput, setUserIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [saveId, setSaveId] = useState(true);
 
-  // OTP step
   const [otpCode, setOtpCode] = useState('');
   const [otpTrust, setOtpTrust] = useState(true);
   const [otpTimer, setOtpTimer] = useState('');
   const [otpVerifying, setOtpVerifying] = useState(false);
-  // Reveal the WebView so the user can use the official SMS/email delivery modal.
   const [showDelivery, setShowDelivery] = useState(false);
 
-  // The WebView's start URL is resolved after reading the force-login flag:
-  // a fresh launch starts at cvg (enables trusted-device auto-login), but right
-  // after a logout we go straight to the SSO login page to force a sign-in.
   const [startUrl, setStartUrl] = useState<string | null>(null);
 
-  // Navigate into the app exactly once.
   const completedRef = useRef(false);
-  // The user has submitted the native credentials.
   const submittedRef = useRef(false);
-  // Latest URL the WebView is on.
   const currentUrlRef = useRef<string>('');
-  // Whether we've already probed during the CURRENT visit to cvg.
   const probedVisitRef = useRef(false);
-  // True after logout: blocks auto-login until the user manually submits credentials.
   const forceLoginRef = useRef(false);
-  // True once we've redirected away from the SSO logout page to the login form.
   const logoutSentRef = useRef(false);
 
   const isBookingOrigin = (url: string) =>
     url.startsWith('https://cvg.jnu.ac.kr') || url.startsWith('http://cvg.jnu.ac.kr');
   const isSsoHost = (url: string) => url.includes('sso.jnu.ac.kr');
 
-  // Resolve the saved ID and the start URL (force-login → SSO login page).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -118,18 +99,11 @@ export default function LoginScreen() {
           await AsyncStorage.removeItem(FORCE_LOGIN_KEY).catch(() => {});
         }
       } catch {
-        // ignore — fall back to the default start URL
+        // fall back to default start URL
       }
       if (!cancelled) {
         forceLoginRef.current = forceLogin;
-        // When forcing re-login, visit the IdP logout endpoint in THIS WebView
-        // first (belt-and-suspenders on top of bridge.logout()), then we'll
-        // redirect to the login form once the logout page finishes loading.
         setStartUrl(forceLogin ? URLS.SSO_LOGOUT : URLS.BOOKING_CALENDAR);
-        // Show the native credentials form straight away — the ID field is
-        // already pre-filled from SAVED_ID_KEY above.  The WebView continues
-        // the SSO_LOGOUT → SSO_LOGIN_RETURN navigation in the background so it
-        // is ready to receive the injected credentials when the user submits.
         if (forceLogin) setPhase('credentials');
       }
     })();
@@ -138,19 +112,16 @@ export default function LoginScreen() {
     };
   }, []);
 
-  /** Finalize login exactly once: persist auth, then enter the app. */
+  /** Finalize login exactly once. RootNavigator will switch to MainTabs automatically. */
   const completeLogin = useCallback(
     (name?: string, id?: string) => {
       if (completedRef.current) return;
       completedRef.current = true;
-      auth.login(name || undefined, id || undefined).then(() => {
-        router.replace('/(tabs)/');
-      });
+      auth.login(name || undefined, id || undefined);
     },
-    [auth, router],
+    [auth],
   );
 
-  /** Probe a cvg page for real auth — once per visit (see AUTH_PROBE_SCRIPT). */
   const maybeProbe = useCallback(() => {
     if (completedRef.current) return;
     if (!isBookingOrigin(currentUrlRef.current)) return;
@@ -159,7 +130,6 @@ export default function LoginScreen() {
     webViewRef.current?.injectJavaScript(AUTH_PROBE_SCRIPT);
   }, []);
 
-  /** On an SSO page, ask which step is showing so the native UI can mirror it. */
   const probeSsoStep = useCallback(() => {
     if (completedRef.current) return;
     webViewRef.current?.injectJavaScript(SSO_STEP_PROBE);
@@ -171,21 +141,16 @@ export default function LoginScreen() {
       currentUrlRef.current = url;
 
       if (isBookingOrigin(url)) {
-        // Don't cover the credentials form with a spinner when the SSO logout
-        // flow briefly passes through or redirects to cvg.
         if (!completedRef.current && !forceLoginRef.current) setPhase('init');
         if (!navState.loading) maybeProbe();
         return;
       }
 
-      // Off cvg → re-arm the cvg probe for our eventual return.
       probedVisitRef.current = false;
 
       if (isSsoHost(url)) {
         if (!navState.loading) {
           if (forceLoginRef.current && !logoutSentRef.current) {
-            // Logout page (or its redirect) finished loading — now navigate to
-            // the actual login form so the user must re-authenticate.
             logoutSentRef.current = true;
             webViewRef.current?.injectJavaScript(
               `window.location.href = ${JSON.stringify(URLS.SSO_LOGIN_RETURN)}; true;`,
@@ -195,12 +160,10 @@ export default function LoginScreen() {
           }
         }
       } else if (submittedRef.current && !navState.loading) {
-        // Left the SSO host after submitting → auth succeeded (cookie is set
-        // even if SSO routed us to the portal). Finish login.
         completeLogin();
       }
     },
-    [maybeProbe, probeSsoStep, completeLogin, phase],
+    [maybeProbe, probeSsoStep, completeLogin],
   );
 
   const handleMessage = useCallback(
@@ -212,7 +175,6 @@ export default function LoginScreen() {
           case 'authState':
             if (data.authed) {
               if (forceLoginRef.current) {
-                // SSO session still alive despite logout attempt — try again.
                 logoutSentRef.current = false;
                 webViewRef.current?.injectJavaScript(
                   `window.location.href = ${JSON.stringify(URLS.SSO_LOGOUT)}; true;`,
@@ -234,8 +196,6 @@ export default function LoginScreen() {
               if (data.timer) setOtpTimer(data.timer);
               setPhase('otp');
             } else if (data.step === 'credentials') {
-              // Back on the credentials page. If we'd already submitted, the
-              // login was rejected — surface the error and let the user retry.
               if (submittedRef.current) {
                 submittedRef.current = false;
                 Alert.alert('로그인 실패', data.error || '아이디 또는 비밀번호를 확인해주세요.');
@@ -255,8 +215,6 @@ export default function LoginScreen() {
               setOtpVerifying(false);
               Alert.alert('인증 오류', data.error || '인증번호 확인에 실패했습니다.');
             }
-            // On ok we keep the spinner; the page auto-verifies and redirects,
-            // which completeLogin() picks up via navigation.
             break;
 
           case 'credError':
@@ -272,14 +230,12 @@ export default function LoginScreen() {
     [completeLogin],
   );
 
-  // While on the native OTP screen, keep the countdown fresh.
   useEffect(() => {
     if (phase !== 'otp' || showDelivery) return;
     const id = setInterval(() => webViewRef.current?.injectJavaScript(OTP_TIMER_SCRIPT), 1000);
     return () => clearInterval(id);
   }, [phase, showDelivery]);
 
-  // ── Actions ──
   const submitCredentials = useCallback(() => {
     const id = userIdInput.trim();
     if (!id || !passwordInput) {
@@ -293,15 +249,13 @@ export default function LoginScreen() {
     forceLoginRef.current = false;
     webViewRef.current?.injectJavaScript(buildFillCredentialsScript(id, passwordInput));
     setPasswordInput('');
-    setPhase('init'); // spinner until the OTP step is detected
-    // The credentials submit may be AJAX (no full load); poll for the next step.
+    setPhase('init');
     setTimeout(probeSsoStep, 1200);
     setTimeout(probeSsoStep, 2600);
   }, [userIdInput, passwordInput, saveId, probeSsoStep]);
 
   const requestSmsCode = useCallback(() => {
     webViewRef.current?.injectJavaScript(OTP_REQUEST_SMS_SCRIPT);
-    // The delivery picker is a page modal we don't mirror yet — reveal it.
     setShowDelivery(true);
   }, []);
 
@@ -325,7 +279,7 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.primary} />
 
       <View style={styles.header}>
         <View style={styles.logoBox}>
@@ -357,7 +311,6 @@ export default function LoginScreen() {
         />
         )}
 
-        {/* Delivery-modal banner while the WebView is revealed for it */}
         {phase === 'otp' && showDelivery && (
           <View style={styles.deliveryBar}>
             <TouchableOpacity onPress={() => setShowDelivery(false)} style={styles.deliveryBack}>
@@ -368,7 +321,6 @@ export default function LoginScreen() {
           </View>
         )}
 
-        {/* ── Native credentials form ── */}
         {phase === 'credentials' && (
           <KeyboardAvoidingView
             style={styles.overlay}
@@ -427,7 +379,6 @@ export default function LoginScreen() {
           </KeyboardAvoidingView>
         )}
 
-        {/* ── Native OTP form ── */}
         {phase === 'otp' && !showDelivery && (
           <KeyboardAvoidingView
             style={styles.overlay}
@@ -492,7 +443,6 @@ export default function LoginScreen() {
           </KeyboardAvoidingView>
         )}
 
-        {/* Spinner */}
         {phase === 'init' && (
           <View style={styles.overlay}>
             <View style={styles.spinnerCenter}>
@@ -545,7 +495,6 @@ const styles = StyleSheet.create({
   },
   webView: { flex: 1 },
 
-  // Delivery-modal bar
   deliveryBar: {
     position: 'absolute',
     top: 0,
@@ -562,7 +511,6 @@ const styles = StyleSheet.create({
   deliveryBackText: { fontSize: Typography.fontSizeSm, color: Colors.primary, fontWeight: Typography.fontWeightSemibold },
   deliveryHint: { fontSize: Typography.fontSizeXs, color: Colors.textSecondary },
 
-  // Shared overlay (covers WebView)
   overlay: {
     position: 'absolute',
     top: 0,
@@ -593,7 +541,6 @@ const styles = StyleSheet.create({
   inputIcon: { marginRight: Spacing.sm },
   input: { flex: 1, paddingVertical: Spacing.md, fontSize: Typography.fontSizeMd, color: Colors.textPrimary },
 
-  // OTP code field
   otpInput: {
     borderWidth: 1,
     borderColor: Colors.border,
